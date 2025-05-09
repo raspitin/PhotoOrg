@@ -1,0 +1,60 @@
+source: /mnt/sdb/Duplicati/
+destination: /mnt/sdb/migratore/Archivio
+database: /mnt/sdb/migratore/Archivio/archivio_migrazione.db
+log: /mnt/sdb/migratore/Archivio/log_migrazione.txt
+
+supported_extensions:
+  - .jpg
+  - .jpeg
+  - .png
+  - .heic
+  - .mp4
+  - .mov
+  - .avi
+  - .mkv
+  - .m2t
+  - .3gp
+
+image_extensions:
+  - .jpg
+  - .jpeg
+  - .png
+  - .heic
+
+video_extensions:
+  - .mp4
+  - .mov
+  - .avi
+  - .mkv
+  - .m2t
+  - .3gp
+
+photographic_prefixes:
+  - JPG
+  - IMG_
+  - MVI_
+  - MVC
+  - CAN_
+  - MG
+  - DSC_
+  - NDC_
+  - _DSC
+  - DSC
+  - ILCE-
+  - HDR
+  - MOV
+  - DSCF
+  - FUJI
+  - _DSF
+  - LUMIX_
+  - OMD_
+  - PENTX
+  - LEICA_
+  - GR_
+  - SAM_
+  - GOPR
+  - GP_
+  - DJI_
+  - IMG-
+  - PXL_
+  - Screenshot_
