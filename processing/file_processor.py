@@ -196,6 +196,7 @@ class FileProcessor:
             f"  Duplicate files: {stats['duplicates']}\n"
             f"  Files to review: {stats['to_review']}\n"
             f"  Unsupported files: {len(ignored)}\n"
+            f"  Total files processed: {stats['migrated'] + stats['duplicates'] + stats['to_review']}\n"
             f"  Total time: {elapsed:.2f} seconds"
         )
         self.log_queue.put(summary)
