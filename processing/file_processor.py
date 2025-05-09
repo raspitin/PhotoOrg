@@ -97,16 +97,23 @@ class FileProcessor:
         hash_results = [HashUtils.compute_hash(file) for file in all_files]
         hash_map = dict(hash_results)
 
-        with Pool(processes=cpu_count()) as pool:
-            results = list(tqdm(
-                pool.imap_unordered(process_file_data_external, [
-                    (file, hash_map[str(file)], self.image_extensions, self.video_extensions, self.photographic_prefixes, self.dest_dir)
-                    for file in all_files
-                ]),
-                total=len(all_files),
-                desc="Elaborazione",
-                unit="file"
-            ))
+        try:
+            with Pool(processes=cpu_count()) as pool:
+                results = list(tqdm(
+                    pool.imap_unordered(process_file_data_external, [
+                        (file, hash_map[str(file)], self.image_extensions, self.video_extensions, self.photographic_prefixes, self.dest_dir)
+                        for file in all_files
+                    ]),
+                    total=len(all_files),
+                    desc="Elaborazione",
+                    unit="file"
+                ))
+        except Exception as e:
+            self.log_queue.put(f"Errore dettagliato: {e}")
+            self.log_queue.put(None)
+            logger_thread.join()
+            conn.close()
+            return
 
         cursor = conn.cursor()
         cursor.execute("SELECT hash FROM files WHERE status = 'migrated'")
@@ -133,11 +140,19 @@ class FileProcessor:
             selected = sorted(entries, key=lambda x: not x[1])[0][0]
             for file_path, is_photo in entries:
                 file_name = file_path.name
-                date_extracted = DateExtractor.extract_date(file_path)
+                date_extracted = DateExtractor.extract_date(file_path, self.image_extensions, self.video_extensions)
                 if date_extracted is None:
                     year = month = None
+                    # Se non abbiamo una data, lo spostiamo nella directory di revisione
+                    review_dir = self.dest_dir / "ToReview"
+                    review_dir.mkdir(parents=True, exist_ok=True)
+                    new_path = FileUtils.safe_copy(file_path, review_dir, file_name)
+                    batch_records.append((str(file_path), file_hash, year, month, media_type, "to_review", str(new_path.parent), new_path.name))
+                    stats["to_review"] += 1
+                    continue
                 else:
                     year, month, _ = date_extracted
+                    
                 media_type = "PHOTO" if file_path.suffix.lower() in [".jpg", ".jpeg", ".png"] else "VIDEO"
                 dest_dir = self.dest_dir / media_type / year / month
                 dup_dir = self.dest_dir / f"{media_type}_DUPLICATES" / year / month
