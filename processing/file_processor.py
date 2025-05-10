@@ -100,7 +100,7 @@ class FileProcessor:
         try:
             with Pool(processes=cpu_count()) as pool:
                 results = list(tqdm(
-                    pool.imap_unordered(process_file_data_external, [
+                    pool.map(process_file_data_external, [
                         (file, hash_map[str(file)], self.image_extensions, self.video_extensions, self.photographic_prefixes, self.dest_dir)
                         for file in all_files
                     ]),

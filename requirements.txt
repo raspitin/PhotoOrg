@@ -1,0 +1,3 @@
+PyYAML>=5.4
+pymediainfo>=1.6
+tqdm>=4.60
