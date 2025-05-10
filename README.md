@@ -62,7 +62,7 @@ A Python tool that scans a source directory for photo and video files, extracts 
   python3 main.py
   ```
 
-* **Reset database, logs, and destination directory:**
+* **Delete database, logs, and destination directory:**
 
   ```bash
   python3 main.py --reset
