@@ -1,58 +1,69 @@
-Photo and Video Organizer
-This tool scans a source directory for photo and video files, extracts metadata (date/time, hashes), organizes them into a structured destination directory, logs operations and tracks records in an SQLite database.
+# Photo and Video Organizer  
 
-Features
-Extracts EXIF dates for images (via GExiv2) and encoded/tagged dates for videos (via MediaInfo).
+A Python tool that scans a source directory for photo and video files, extracts metadata (date/time, hashes), organizes them into a structured destination directory, and logs operations to an SQLite database.  
 
-Falls back to filename-based date parsing when metadata is missing.
+## Features  
+- **Metadata Extraction**:  
+  - Extracts EXIF dates for images (using `GExiv2`).  
+  - Extracts encoded/tagged dates for videos (using `MediaInfo`).  
+  - Falls back to filename-based date parsing if metadata is missing.  
+- **Duplicate Detection**:  
+  - Computes SHA-256 hashes to identify duplicates.  
+- **Structured Organization**:  
+  - Organizes files into `PHOTO/YYYY/MM` and `VIDEO/YYYY/MM` directories.  
+  - Moves duplicates to a separate folder.  
+- **Audit & Logging**:  
+  - Tracks all operations in an SQLite database.  
+  - Logs detailed info and warnings to a file.  
 
-Computes SHA-256 hash to detect duplicates.
+## Prerequisites  
+- **Linux** (with `sudo` privileges).  
+- **Python 3.8+**.  
+- **System Packages**:  
+  ```bash
+  sudo apt install python3-gi gir1.2-gexiv2-0.10 libgexiv2-dev mediainfo
 
-Organizes files into PHOTO/YYYY/MM and VIDEO/YYYY/MM, moves duplicates into separate folders.
+##Installation
+  git clone https://github.com/your-username/photo-video-organizer.git
+  cd photo-video-organizer
+  Installation
+Clone the repository:
 
-Stores all operations in an SQLite database for audit.
+bash
+git clone https://github.com/your-username/photo-video-organizer.git
+cd photo-video-organizer
+Run the bootstrap script (installs system and Python dependencies):
 
-Logs detailed info and warnings to file.
-
-Prerequisites
-Linux with sudo privileges
-
-Python 3.8+
-
-System packages: python3-gi, gir1.2-gexiv2-0.10, libgexiv2-dev, mediainfo
-
-Installation
-Clone the repository
-git clone https://github.com/tuo-username/duplicati-foto-video.git
-cd duplicati-foto-video
-
-Esegui lo script di bootstrap (installa dipendenze di sistema e Python)
+bash
 ./bootstrap.sh
+Run the setup script (configures Python libraries):
 
-Esegui lo script di setup (installa librerie Python)
+bash
 ./setup.sh
-
-Configura config.yaml con i percorsi desiderati.
+Edit config.yaml to set your desired paths and file extensions.
 
 Usage
-Avvio normale:
-python3 main.py
+Normal execution:
 
-Per ripulire database, log e directory di destinazione:
+bash
+ python3 main.py
+Reset database, logs, and destination directory:
+
+bash
 python3 main.py --reset
-
-Project structure
-bootstrap.sh, setup.sh – script di installazione e setup
-
-config.yaml – configurazione dei percorsi e estensioni supportate
-
-processing/ – modulo Python per elaborazione file
-
-database/ – modulo per gestione SQLite
-
-loggingSetup/ – modulo per configurazione logging
-
-main.py – punto di ingresso primario
-
+Project Structure
+plaintext
+.
+├── bootstrap.sh          # System/Python dependency installer  
+├── setup.sh              # Python environment setup  
+├── config.yaml           # Configuration (paths, supported extensions)  
+├── processing/           # File processing module  
+├── database/             # SQLite database handler  
+├── loggingSetup/         # Logging configuration  
+└── main.py               # Primary entry point  
 Contributing
-Pull request e issue sono benvenute. Assicurati di aggiornare requirements.txt se aggiungi nuove dipendenze.
+Pull requests and issues are welcome!
+
+Ensure you update requirements.txt if adding new dependencies.
+
+Follow PEP 8 style guidelines for Python code.
