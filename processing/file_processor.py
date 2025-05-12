@@ -54,9 +54,15 @@ class FileProcessor:
         
         self.stats['unsupported'] = len(unsupported_files)
         
+        # Processa anche i file non supportati per registrarli nel database
+        print(f"\nRegistrazione file non supportati...")
+        for file_path in unsupported_files:
+            self._handle_unsupported_file(file_path)
+        
         if len(supported_files) == 0:
-            print("Nessun file da elaborare trovato.")
+            print("Nessun file supportato da elaborare.")
             logging.info("Nessun file con estensioni supportate trovato.")
+            self._print_summary()
             return
         
         print(f"\nTrovati {len(supported_files)} file da elaborare")
@@ -137,6 +143,26 @@ class FileProcessor:
                 return True
                 
         return False
+
+    def _handle_unsupported_file(self, file_path):
+        """Gestisce un file con estensione non supportata."""
+        # Calcola hash del file
+        _, file_hash = HashUtils.compute_hash(file_path)
+        
+        # Registra nel database
+        record = (
+            str(file_path),
+            file_hash,
+            None,  # year
+            None,  # month
+            "UNSUPPORTED",  # media_type
+            "unsupported",  # status
+            None,  # destination_path
+            None   # final_name
+        )
+        self.db_manager.insert_file(self.conn, record)
+        
+        logging.info(f"File non supportato registrato: {file_path}")
 
     def _print_summary(self):
         """Stampa il riepilogo finale dell'elaborazione."""
