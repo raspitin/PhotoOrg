@@ -17,13 +17,28 @@ def main():
         print(f"Errore durante il caricamento della configurazione: {e}")
         return
 
+    # Verifica se la directory di destinazione esiste
+    dest_dir = Path(config["destination"])
+    if not dest_dir.exists():
+        response = input(f"La directory di destinazione '{dest_dir}' non esiste. Vuoi crearla? [s/N]: ").strip().lower()
+        if response == "s":
+            try:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                print(f"Directory '{dest_dir}' creata con successo.")
+            except Exception as e:
+                print(f"Errore durante la creazione della directory di destinazione: {e}")
+                return
+        else:
+            print("Operazione annullata. Nessuna directory creata.")
+            return
+
     # Setup logging
     LoggingSetup.setup_logging(config["log"])
 
     # Inizializza il database manager
     db_manager = DatabaseManager(config["database"])
 
-    # Inizializza il processore dei file
+    # Inizializza il processore dei file con i nuovi parametri di esclusione
     file_processor = FileProcessor(
         source_dir=config["source"],
         dest_dir=config["destination"],
@@ -31,7 +46,9 @@ def main():
         supported_extensions=config["supported_extensions"],
         image_extensions=config["image_extensions"],
         video_extensions=config["video_extensions"],
-        photographic_prefixes=config.get("photographic_prefixes", [])
+        photographic_prefixes=config.get("photographic_prefixes", []),
+        exclude_hidden_dirs=config.get("exclude_hidden_dirs", True),
+        exclude_patterns=config.get("exclude_patterns", [])
     )
 
     # Modalità di reset

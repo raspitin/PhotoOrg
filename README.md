@@ -39,33 +39,40 @@ A Python tool that scans a source directory for photo and video files, extracts 
    git clone https://github.com/your-username/photo-video-organizer.git
    cd photo-video-organizer
    ```
-
 2. Run the bootstrap script (installs system and Python dependencies):
 
    ```bash
    ./bootstrap.sh
    ```
+3. Create and activate the Python virtual environment:
 
-3. Run the setup script (configures Python libraries):
+   ```bash
+   source venv/bin/activate
+   ```
+4. Run the setup script (installs Python libraries):
 
    ```bash
    ./setup.sh
    ```
-
-4. Edit `config.yaml` to set your desired paths and file extensions.
+5. Edit `config.yaml` to set your desired paths and file extensions.
 
 ## Usage
+
+Ensure the virtual environment is active:
+
+```bash
+source venv/bin/activate
+```
 
 * **Normal execution:**
 
   ```bash
-  python3 main.py
+  python3 PhotoOrg.py
   ```
-
-* **Delete database, logs, and destination directory:**
+* **Reset database, logs, and destination directory:**
 
   ```bash
-  python3 main.py --reset
+  python3 PhotoOrg.py --reset
   ```
 
 ## Project Structure
@@ -78,7 +85,7 @@ A Python tool that scans a source directory for photo and video files, extracts 
 ├── processing/           # File processing module
 ├── database/             # SQLite database handler
 ├── loggingSetup/         # Logging configuration
-└── main.py               # Primary entry point
+└── PhotoOrg.py           # Primary entry point
 ```
 
 ## Contributing

@@ -1,7 +1,18 @@
-source: /mnt/sdb/Duplicati/
-destination: /mnt/sdb/migratore/Archivio
-database: /mnt/sdb/migratore/Archivio/archivio_migrazione.db
-log: /mnt/sdb/migratore/Archivio/log_migrazione.txt
+source: /mnt/Multimedia/FOTO/Camera
+destination: /home/andrea/Archivio
+database: /home/andrea/Archivio/archivio_migrazione.db
+log: /home/andrea/Archivio/log_migrazione.txt
+
+# Opzioni di esclusione
+exclude_hidden_dirs: true  # Esclude directory che iniziano con '.'
+exclude_patterns:          # Ulteriori pattern da escludere (opzionale)
+  - .DS_Store
+  - Thumbs.db
+  - desktop.ini
+  - .git
+  - .svn
+  - __pycache__
+  - node_modules
 
 supported_extensions:
   - .jpg
