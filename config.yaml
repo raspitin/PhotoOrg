@@ -1,7 +1,7 @@
-source: /mnt/Multimedia/FOTO/Camera
-destination: /home/andrea/Archivio
-database: /home/andrea/Archivio/archivio_migrazione.db
-log: /home/andrea/Archivio/log_migrazione.txt
+source: /path/to/source/directory
+destination: /path/to/destination/directory
+database: /path/to/destination/directory/archivio_migrazione.db
+log: /path/to/destination/directory/log_migrazione.txt
 
 # Opzioni di esclusione
 exclude_hidden_dirs: true  # Esclude directory che iniziano con '.'
