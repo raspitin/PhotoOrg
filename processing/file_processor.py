@@ -68,39 +68,158 @@ class FileProcessor:
         print(f"\nTrovati {len(supported_files)} file da elaborare")
         logging.info(f"Trovati {len(supported_files)} file da elaborare")
         
-        # Configurazione tqdm con parametri ottimizzati
+        # Progress bar semplice e pulita
         with tqdm(total=len(supported_files), 
-                 desc="Elaborazione file", 
+                 desc="Elaborazione", 
                  unit="file",
-                 file=sys.stdout,  # Output diretto su stdout
-                 dynamic_ncols=True,  # Adatta la larghezza dinamicamente
-                 miniters=1,  # Aggiorna ad ogni iterazione
-                 smoothing=0.1,  # Smoothing più reattivo
-                 leave=True) as pbar:
+                 dynamic_ncols=True,
+                 leave=True,
+                 bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
             
             # Processa i file uno alla volta
             for file_path in supported_files:
                 try:
-                    # Aggiorna descrizione con il file corrente
-                    pbar.set_description(f"Elaborando: {file_path.name[:50]}...")
+                    # Aggiorna solo il nome del file corrente (troncato)
+                    filename = file_path.name
+                    if len(filename) > 30:
+                        filename = filename[:27] + "..."
+                    pbar.set_description(f" {filename}")
                     
-                    # Processa il file
-                    self._process_file(file_path)
+                    # Processa il file (logging SOLO su file, non console)
+                    self._process_file_quiet(file_path)
                     
-                    # Aggiorna la progress bar immediatamente
+                    # Aggiorna progress bar
                     pbar.update(1)
-                    pbar.refresh()  # Forza il refresh della visualizzazione
                     
                 except Exception as e:
+                    # Solo errori critici visibili
+                    tqdm.write(f"? {file_path.name}: {str(e)}")
                     logging.error(f"Errore durante l'elaborazione di {file_path}: {e}")
-                    tqdm.write(f"??  Errore: {file_path.name} - {str(e)}")
                     pbar.update(1)
         
-        print("\nElaborazione completata!")
+        print("\n Elaborazione completata!")
         logging.info("Scansione completata.")
         
         # Mostra il summary finale
         self._print_summary()
+
+    def _process_file_quiet(self, file_path):
+        """Processa un singolo file senza output su console."""
+        # Log solo su file, NON su console
+        logging.info(f"Elaborazione file: {file_path}")
+        
+        # Calcola hash del file
+        _, file_hash = HashUtils.compute_hash(file_path)
+        
+        # Controlla duplicati nel database
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM files WHERE hash = ?", (file_hash,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # File duplicato trovato
+            self._handle_duplicate_quiet(file_path, file_hash)
+        else:
+            # File nuovo
+            self._handle_new_file_quiet(file_path, file_hash)
+
+    def _handle_new_file_quiet(self, file_path, file_hash):
+        """Gestisce un nuovo file senza output su console."""
+        # Estrai data
+        date_info = DateExtractor.extract_date(
+            file_path, 
+            self.image_extensions, 
+            self.video_extensions
+        )
+        
+        if date_info:
+            year, month, _ = date_info
+            media_type = self._get_media_type(file_path)
+            
+            # Crea directory di destinazione
+            dest_dir = self.dest_dir / media_type / year / month
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Copia il file
+            dest_file = FileUtils.safe_copy(file_path, dest_dir, file_path.name)
+            
+            # Registra nel database
+            record = (
+                str(file_path),
+                file_hash,
+                year,
+                month,
+                media_type,
+                "processed",
+                str(dest_dir),
+                dest_file.name
+            )
+            self.db_manager.insert_file(self.conn, record)
+            
+            # Aggiorna statistiche
+            self.stats['migrated'] += 1
+            self.stats['total_processed'] += 1
+            
+            # Log solo su file
+            logging.info(f"File processato: {file_path} -> {dest_file}")
+        else:
+            # Se non si riesce a estrarre la data, sposta in ToReview
+            self._handle_no_date_file_quiet(file_path, file_hash)
+
+    def _handle_duplicate_quiet(self, file_path, file_hash):
+        """Gestisce un file duplicato senza output su console."""
+        media_type = self._get_media_type(file_path)
+        duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
+        duplicate_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copia il file nella cartella duplicati
+        dest_file = FileUtils.safe_copy(file_path, duplicate_dir, file_path.name)
+        
+        # Registra nel database
+        record = (
+            str(file_path),
+            file_hash,
+            None,  # year
+            None,  # month
+            media_type,
+            "duplicate",
+            str(duplicate_dir),
+            dest_file.name
+        )
+        self.db_manager.insert_file(self.conn, record)
+        
+        # Aggiorna statistiche
+        self.stats['duplicates'] += 1
+        self.stats['total_processed'] += 1
+        
+        # Log solo su file
+        logging.info(f"Duplicato gestito: {file_path} -> {dest_file}")
+
+    def _handle_no_date_file_quiet(self, file_path, file_hash):
+        """Gestisce file senza data estraibile senza output su console."""
+        review_dir = self.dest_dir / "ToReview"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        
+        dest_file = FileUtils.safe_copy(file_path, review_dir, file_path.name)
+        
+        record = (
+            str(file_path),
+            file_hash,
+            None,
+            None,
+            self._get_media_type(file_path),
+            "to_review",
+            str(review_dir),
+            dest_file.name
+        )
+        self.db_manager.insert_file(self.conn, record)
+        
+        # Aggiorna statistiche
+        self.stats['to_review'] += 1
+        self.stats['total_processed'] += 1
+        
+        # Log solo su file
+        logging.info(f"File senza data: {file_path} -> {dest_file}")
 
     def _get_all_files(self):
         """Generatore che restituisce tutti i file (per debug)."""

@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 from config.config_loader import ConfigLoader
 from loggingSetup.logging_setup import LoggingSetup
 from database.database_manager import DatabaseManager
@@ -14,9 +17,8 @@ def setup_minimal_logging():
     Configura logging minimo per tracciare eventi prima della configurazione completa.
     """
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler()]
+        level=logging.ERROR,
+        format="%(levelname)s: %(message)s"
     )
 
 
@@ -45,7 +47,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError(f"Directory sorgente non trovata: {source_path}")
     
     if not source_path.is_dir():
-        raise ValueError(f"Il percorso sorgente non è una directory: {source_path}")
+        raise ValueError(f"Il percorso sorgente non e' una directory: {source_path}")
     
     # Verifica che la directory sorgente sia accessibile in lettura
     try:
@@ -60,7 +62,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     dest_path = Path(config["destination"])
     if dest_path.exists():
         if not dest_path.is_dir():
-            raise ValueError(f"Il percorso di destinazione esiste ma non è una directory: {dest_path}")
+            raise ValueError(f"Il percorso di destinazione esiste ma non e' una directory: {dest_path}")
         
         # Verifica permessi di scrittura sulla directory di destinazione
         try:
@@ -78,7 +80,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         if not isinstance(config[ext_key], list):
             raise ValueError(f"'{ext_key}' deve essere una lista")
         if not config[ext_key]:  # Lista vuota
-            raise ValueError(f"'{ext_key}' non può essere una lista vuota")
+            raise ValueError(f"'{ext_key}' non puo' essere una lista vuota")
     
     # Verifica che photographic_prefixes sia una lista (se presente)
     if "photographic_prefixes" in config and not isinstance(config["photographic_prefixes"], list):
@@ -88,7 +90,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     if "exclude_patterns" in config and not isinstance(config["exclude_patterns"], list):
         raise ValueError("'exclude_patterns' deve essere una lista")
     
-    logging.info("✅ Configurazione validata con successo")
+    print("Configurazione validata con successo")
 
 
 def create_destination_directory(dest_dir: Path) -> bool:
@@ -99,42 +101,35 @@ def create_destination_directory(dest_dir: Path) -> bool:
         dest_dir: Path della directory di destinazione
         
     Returns:
-        bool: True se la directory esiste o è stata creata, False altrimenti
+        bool: True se la directory esiste o e' stata creata, False altrimenti
     """
     if dest_dir.exists():
         if not dest_dir.is_dir():
-            logging.error(f"Il percorso di destinazione esiste ma non è una directory: {dest_dir}")
-            print(f"Errore: '{dest_dir}' esiste ma non è una directory.")
+            print(f"Errore: '{dest_dir}' esiste ma non e' una directory.")
             return False
-        logging.info(f"Directory di destinazione già esistente: {dest_dir}")
+        print(f"Directory di destinazione gia' esistente: {dest_dir}")
         return True
     
     try:
         response = input(f"La directory di destinazione '{dest_dir}' non esiste. Vuoi crearla? [s/N]: ").strip().lower()
         if response == "s":
             dest_dir.mkdir(parents=True, exist_ok=True)
-            logging.info(f"✅ Directory '{dest_dir}' creata con successo")
             print(f"Directory '{dest_dir}' creata con successo.")
             return True
         else:
-            logging.info("Operazione annullata dall'utente")
             print("Operazione annullata. Nessuna directory creata.")
             return False
             
     except PermissionError as e:
-        logging.error(f"Permesso negato per creare la directory '{dest_dir}': {e}")
         print(f"Errore: Permesso negato per creare la directory '{dest_dir}': {e}")
         return False
     except OSError as e:
-        logging.error(f"Errore del sistema operativo durante la creazione di '{dest_dir}': {e}")
         print(f"Errore del sistema durante la creazione della directory '{dest_dir}': {e}")
         return False
     except KeyboardInterrupt:
-        logging.warning("Operazione interrotta dall'utente (Ctrl+C)")
         print("\nOperazione interrotta dall'utente.")
         return False
     except Exception as e:
-        logging.error(f"Errore imprevisto durante la creazione della directory '{dest_dir}': {e}")
         print(f"Errore imprevisto durante la creazione della directory '{dest_dir}': {e}")
         return False
 
@@ -149,9 +144,8 @@ def reset_environment(database_path: str, log_path: str, dest_dir: str) -> None:
         log_path: Percorso del file di log
         dest_dir: Percorso della directory di destinazione
     """
-    logging.info("🔄 Richiesta procedura di reset dell'ambiente")
-    print("🔄 ATTENZIONE: Procedura di Reset dell'Ambiente")
-    print("Questa operazione eliminerà:")
+    print("ATTENZIONE: Procedura di Reset dell'Ambiente")
+    print("Questa operazione eliminera':")
     print(f"  - Database: {database_path}")
     print(f"  - File di log: {log_path}")
     print(f"  - Directory: {dest_dir}/PHOTO")
@@ -164,16 +158,13 @@ def reset_environment(database_path: str, log_path: str, dest_dir: str) -> None:
     try:
         response = input("Sei sicuro di voler procedere? [s/N]: ").strip().lower()
         if response != "s":
-            logging.info("Reset annullato dall'utente")
             print("Reset annullato.")
             return
     except KeyboardInterrupt:
-        logging.info("Reset interrotto dall'utente (Ctrl+C)")
         print("\nReset interrotto.")
         return
     
-    logging.info("🔄 Inizio procedura di reset dell'ambiente")
-    print("🔄 Inizio procedura di reset dell'ambiente")
+    print("Inizio procedura di reset dell'ambiente")
     
     reset_success = True
     
@@ -182,46 +173,36 @@ def reset_environment(database_path: str, log_path: str, dest_dir: str) -> None:
     if db_path.exists():
         try:
             db_path.unlink()
-            logging.info(f"✅ Database eliminato: {db_path}")
             print(f"Database eliminato: {db_path}")
         except PermissionError as e:
-            logging.error(f"❌ Permesso negato per eliminare il database '{db_path}': {e}")
             print(f"Errore: Permesso negato per eliminare il database '{db_path}': {e}")
             reset_success = False
         except OSError as e:
-            logging.error(f"❌ Errore del sistema operativo eliminando il database '{db_path}': {e}")
             print(f"Errore del sistema eliminando il database '{db_path}': {e}")
             reset_success = False
         except Exception as e:
-            logging.error(f"❌ Errore imprevisto eliminando il database '{db_path}': {e}")
             print(f"Errore imprevisto eliminando il database '{db_path}': {e}")
             reset_success = False
     else:
-        logging.info(f"ℹ️ Database non trovato (già eliminato?): {db_path}")
-        print(f"Database non trovato (già eliminato?): {db_path}")
+        print(f"Database non trovato (gia' eliminato?): {db_path}")
 
     # Elimina il file di log
     log_file = Path(log_path)
     if log_file.exists():
         try:
             log_file.unlink()
-            logging.info(f"✅ File di log eliminato: {log_file}")
             print(f"File di log eliminato: {log_file}")
         except PermissionError as e:
-            logging.error(f"❌ Permesso negato per eliminare il log '{log_file}': {e}")
             print(f"Errore: Permesso negato per eliminare il log '{log_file}': {e}")
             reset_success = False
         except OSError as e:
-            logging.error(f"❌ Errore del sistema operativo eliminando il log '{log_file}': {e}")
             print(f"Errore del sistema eliminando il log '{log_file}': {e}")
             reset_success = False
         except Exception as e:
-            logging.error(f"❌ Errore imprevisto eliminando il log '{log_file}': {e}")
             print(f"Errore imprevisto eliminando il log '{log_file}': {e}")
             reset_success = False
     else:
-        logging.info(f"ℹ️ File di log non trovato (già eliminato?): {log_file}")
-        print(f"File di log non trovato (già eliminato?): {log_file}")
+        print(f"File di log non trovato (gia' eliminato?): {log_file}")
 
     # Elimina le directory di destinazione
     dest_path = Path(dest_dir)
@@ -232,30 +213,23 @@ def reset_environment(database_path: str, log_path: str, dest_dir: str) -> None:
         if folder_path.exists():
             try:
                 shutil.rmtree(folder_path)
-                logging.info(f"✅ Cartella eliminata: {folder_path}")
                 print(f"Cartella eliminata: {folder_path}")
             except PermissionError as e:
-                logging.error(f"❌ Permesso negato per eliminare '{folder_path}': {e}")
                 print(f"Errore: Permesso negato per eliminare '{folder_path}': {e}")
                 reset_success = False
             except OSError as e:
-                logging.error(f"❌ Errore del sistema operativo eliminando '{folder_path}': {e}")
                 print(f"Errore del sistema eliminando '{folder_path}': {e}")
                 reset_success = False
             except Exception as e:
-                logging.error(f"❌ Errore imprevisto eliminando '{folder_path}': {e}")
                 print(f"Errore imprevisto eliminando '{folder_path}': {e}")
                 reset_success = False
         else:
-            logging.info(f"ℹ️ Cartella non trovata (già eliminata?): {folder_path}")
-            print(f"Cartella non trovata (già eliminata?): {folder_path}")
+            print(f"Cartella non trovata (gia' eliminata?): {folder_path}")
     
     if reset_success:
-        logging.info("✅ Reset dell'ambiente completato con successo")
-        print("✅ Reset dell'ambiente completato con successo")
+        print("Reset dell'ambiente completato con successo")
     else:
-        logging.warning("⚠️ Reset dell'ambiente completato con alcuni errori. Controlla i log sopra.")
-        print("⚠️ Reset dell'ambiente completato con alcuni errori. Controlla i messaggi sopra.")
+        print("Reset dell'ambiente completato con alcuni errori. Controlla i messaggi sopra.")
 
 
 def initialize_logging(config: Dict[str, Any]) -> None:
@@ -267,10 +241,10 @@ def initialize_logging(config: Dict[str, Any]) -> None:
     """
     try:
         LoggingSetup.setup_logging(config["log"])
-        logging.info("✅ Sistema di logging completo inizializzato")
+        print("Sistema di logging inizializzato")
     except Exception as e:
-        logging.error(f"❌ Errore durante l'inizializzazione del logging completo: {e}")
-        logging.info("ℹ️ Continuo con il logging di base")
+        print(f"Errore durante l'inizializzazione del logging: {e}")
+        print("Continuo con il logging di base")
 
 
 def initialize_database(config: Dict[str, Any]) -> Optional[DatabaseManager]:
@@ -285,10 +259,10 @@ def initialize_database(config: Dict[str, Any]) -> Optional[DatabaseManager]:
     """
     try:
         db_manager = DatabaseManager(config["database"])
-        logging.info("✅ Database manager inizializzato")
+        print("Database manager inizializzato")
         return db_manager
     except Exception as e:
-        logging.error(f"❌ Errore durante l'inizializzazione del database: {e}")
+        print(f"Errore durante l'inizializzazione del database: {e}")
         return None
 
 
@@ -315,10 +289,10 @@ def initialize_file_processor(config: Dict[str, Any], db_manager: DatabaseManage
             exclude_hidden_dirs=config.get("exclude_hidden_dirs", True),
             exclude_patterns=config.get("exclude_patterns", [])
         )
-        logging.info("✅ File processor inizializzato")
+        print("File processor inizializzato")
         return file_processor
     except Exception as e:
-        logging.error(f"❌ Errore durante l'inizializzazione del file processor: {e}")
+        print(f"Errore durante l'inizializzazione del file processor: {e}")
         return None
 
 
@@ -326,20 +300,19 @@ def main():
     """
     Funzione principale con gestione completa degli errori e logging anticipato.
     """
-    # Setup logging minimo per tracciare tutto fin dall'inizio
+    # Setup logging minimo SOLO per errori critici iniziali
     setup_minimal_logging()
-    logging.info("🚀 Avvio Photo and Video Organizer")
+    
+    print("Avvio Photo and Video Organizer")
     
     # Carica e valida la configurazione
     try:
         config = ConfigLoader.load_config()
-        logging.info("✅ Configurazione caricata")
+        print("Configurazione caricata")
     except FileNotFoundError:
-        logging.error("❌ Il file di configurazione 'config.yaml' non è stato trovato")
-        print("Errore: Il file di configurazione 'config.yaml' non è stato trovato.")
+        print("Errore: Il file di configurazione 'config.yaml' non e' stato trovato.")
         return
     except Exception as e:
-        logging.error(f"❌ Errore durante il caricamento della configurazione: {e}")
         print(f"Errore durante il caricamento della configurazione: {e}")
         return
     
@@ -347,62 +320,53 @@ def main():
     try:
         validate_config(config)
     except ValueError as e:
-        logging.error(f"❌ Configurazione non valida: {e}")
         print(f"Errore di configurazione: {e}")
         return
     except Exception as e:
-        logging.error(f"❌ Errore imprevisto durante la validazione: {e}")
         print(f"Errore durante la validazione della configurazione: {e}")
         return
     
-    # Modalità di reset - gestita prima di altre inizializzazioni
+    # Modalita' di reset - gestita prima di altre inizializzazioni
     if len(sys.argv) > 1 and sys.argv[1] == "--reset":
-        logging.info("🔄 Modalità reset attivata")
-        # Inizializza logging completo per il reset
+        print("Modalita' reset attivata")
+        # Setup logging per reset
         initialize_logging(config)
         reset_environment(config["database"], config["log"], config["destination"])
         return
     
-    # Inizializza il logging completo
+    # Inizializza il logging completo (ORA SOLO SU FILE)
     initialize_logging(config)
     
     # Verifica/crea la directory di destinazione
     dest_dir = Path(config["destination"])
     if not create_destination_directory(dest_dir):
-        logging.error("❌ Impossibile procedere senza directory di destinazione")
-        print("Operazione annullata. Impossibile procedere senza directory di destinazione.")
+        print("Impossibile procedere senza directory di destinazione.")
         return
     
     # Inizializza il database manager
     db_manager = initialize_database(config)
     if db_manager is None:
-        logging.error("❌ Impossibile procedere senza database manager")
         print("Errore critico: impossibile inizializzare il database.")
         return
     
     # Inizializza il processore dei file
     file_processor = initialize_file_processor(config, db_manager)
     if file_processor is None:
-        logging.error("❌ Impossibile procedere senza file processor")
         print("Errore critico: impossibile inizializzare il processore dei file.")
         return
     
     # Scansiona la directory di origine e processa i file
     try:
-        logging.info("📁 Inizio scansione della directory sorgente")
+        print("Inizio scansione della directory sorgente")
         file_processor.scan_directory()
-        logging.info("✅ Scansione completata con successo")
+        print("Scansione completata con successo")
     except KeyboardInterrupt:
-        logging.warning("⚠️ Operazione interrotta dall'utente (Ctrl+C)")
-        print("\nOperazione interrotta dall'utente.")
+        print("\nOperazione interrotta dall'utente (Ctrl+C)")
     except PermissionError as e:
-        logging.error(f"❌ Permesso negato durante la scansione: {e}")
         print(f"Errore di permessi: {e}")
     except OSError as e:
-        logging.error(f"❌ Errore del sistema operativo durante la scansione: {e}")
         print(f"Errore del sistema: {e}")
     except Exception as e:
-        logging.error(f"❌ Errore imprevisto durante la scansione: {e}")
         print(f"Errore durante la scansione della directory: {e}")
 
 
