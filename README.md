@@ -2,7 +2,7 @@
 
 **Production-ready parallel photo and video organizer**
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/yourusername/PhotoOrg/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/raspitin/PhotoOrg/releases/tag/v1.0.0)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 
@@ -34,7 +34,7 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/PhotoOrg.git
+git clone https://github.com/raspitin/PhotoOrg.git
 cd PhotoOrg
 
 # Install system dependencies (Ubuntu/Debian)
