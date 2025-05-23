@@ -43,7 +43,7 @@ sudo apt install python3-gi gir1.2-gexiv2-0.10 libgexiv2-dev mediainfo python3-d
 
 # Setup Python environment
 ./bootstrap.sh
-x./setup.sh
+./setup.sh
 source venv/bin/activate
 ```
 
