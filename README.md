@@ -36,7 +36,7 @@ A Python tool that scans a source directory for photo and video files, extracts 
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/your-username/photo-video-organizer.git
+   gh repo clone raspitin/PhotoOrg
    cd photo-video-organizer
    ```
 2. Run the bootstrap script (installs system and Python dependencies):
