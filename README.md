@@ -266,7 +266,7 @@ PhotoOrg/
 
 ## Changelog
 
-### v1.0.0 (2025-01-XX)
+### v1.1.0 (2025-01-23)
 
 **First stable release**
 
