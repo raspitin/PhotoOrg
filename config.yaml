@@ -1,11 +1,52 @@
+# PhotoOrg v1.0.0 Configuration
+# Configurazione completa per organizzatore foto/video con processing parallelo
+
+# Directory paths - MODIFICA QUESTI PERCORSI
 source: /path/to/source/directory
 destination: /path/to/destination/directory
 database: /path/to/destination/directory/archivio_migrazione.db
 log: /path/to/destination/directory/log_migrazione.txt
 
-# Opzioni di esclusione
+# Performance Configuration
+# Configurazioni Performance
+performance_config:
+  batch_size: 100               # Dimensione batch per operazioni database
+  memory_limit: 1073741824     # Limite memoria in bytes (1GB)
+  temp_dir: null               # Directory temporanea (null = system default)
+  cleanup_temp_files: true    # Pulisci file temporanei al completamento
+  hash_algorithm: sha256       # Algoritmo hash per duplicati (sha256, md5)
+  buffer_size: 65536          # Dimensione buffer per lettura file (64KB)
+
+# Error Handling Configuration
+# Configurazione Gestione Errori
+error_handling:
+  continue_on_error: true      # Continua processing anche con errori
+  max_retries: 3              # Numero massimo tentativi per file problematici
+  retry_delay: 1.0            # Ritardo tra tentativi (secondi)
+  quarantine_errors: true     # Sposta file problematici in quarantena
+
+# Parallel Processing Configuration
+# Configurazione Processing Parallelo
+parallel_processing:
+  enabled: true                    # Abilita/disabilita processing parallelo
+  max_workers: null               # Numero max worker (null = auto-detect)
+  cpu_multiplier: 2               # Moltiplicatore CPU per I/O intensive tasks
+  max_workers_limit: 16           # Limite massimo worker per evitare overhead
+  progress_update_interval: 0.1   # Intervallo aggiornamento progress (secondi)
+
+# Database Configuration
+# Configurazione Database Thread-Safe
+database_config:
+  connection_timeout: 30.0        # Timeout connessione database (secondi)
+  wal_mode: true                 # Abilita WAL mode per migliori prestazioni concurrent
+  cache_size: 10000              # Dimensione cache SQLite
+  memory_mapping: 268435456      # Memory mapping size (256MB)
+  vacuum_on_completion: true     # Esegui VACUUM al completamento
+
+# File Exclusion Options
+# Opzioni di esclusione file/directory
 exclude_hidden_dirs: true  # Esclude directory che iniziano con '.'
-exclude_patterns:          # Ulteriori pattern da escludere (opzionale)
+exclude_patterns:          # Pattern aggiuntivi da escludere
   - .DS_Store
   - Thumbs.db
   - desktop.ini
@@ -13,33 +54,97 @@ exclude_patterns:          # Ulteriori pattern da escludere (opzionale)
   - .svn
   - __pycache__
   - node_modules
+  - .tmp
+  - .temp
+  - .lock
+  - .cache
 
+# Logging and Progress Configuration
+# Configurazione Logging e Progress
+logging_config:
+  enable_thread_logging: true     # Log con informazioni thread
+  log_level: INFO                # Livello log (DEBUG, INFO, WARNING, ERROR)
+  progress_bar_style: modern     # Stile progress bar (modern, classic)
+  show_thread_stats: true       # Mostra statistiche per thread
+
+# File Scanning Configuration  
+# Configurazione Scansione File
+scan_config:
+  follow_symlinks: false         # Segui i link simbolici
+  max_file_size: null           # Dimensione massima file in bytes (null = no limit)
+  skip_empty_files: true        # Salta file vuoti
+  verify_file_integrity: true   # Verifica integrità file durante il processing
+
+# Supported File Extensions
+# Estensioni file supportate
 supported_extensions:
   - .jpg
   - .jpeg
   - .png
   - .heic
+  - .heif
+  - .tiff
+  - .tif
+  - .bmp
+  - .webp
+  - .gif
+  - .raw
+  - .cr2
+  - .nef
+  - .arw
+  - .dng
   - .mp4
   - .mov
   - .avi
   - .mkv
   - .m2t
+  - .mts
   - .3gp
+  - .wmv
+  - .flv
+  - .webm
+  - .m4v
+  - .mpg
+  - .mpeg
 
+# Image File Extensions
+# Estensioni specifiche per immagini
 image_extensions:
   - .jpg
   - .jpeg
   - .png
   - .heic
+  - .heif
+  - .tiff
+  - .tif
+  - .bmp
+  - .webp
+  - .gif
+  - .raw
+  - .cr2
+  - .nef
+  - .arw
+  - .dng
 
+# Video File Extensions
+# Estensioni specifiche per video
 video_extensions:
   - .mp4
   - .mov
   - .avi
   - .mkv
   - .m2t
+  - .mts
   - .3gp
+  - .wmv
+  - .flv
+  - .webm
+  - .m4v
+  - .mpg
+  - .mpeg
 
+# Photographic Filename Prefixes
+# Prefissi comuni per file fotografici
 photographic_prefixes:
   - JPG
   - IMG_
@@ -69,3 +174,10 @@ photographic_prefixes:
   - IMG-
   - PXL_
   - Screenshot_
+  - PANO_
+  - BURST
+  - NIGHT_
+  - PORTRT
+  - VID_
+  - REC_
+
