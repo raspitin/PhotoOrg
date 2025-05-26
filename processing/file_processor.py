@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-FileProcessor with Parallel Processing Support - v1.0.0
-Processore di file con supporto per elaborazione parallela multi-thread
+FileProcessor with Parallel Processing Support and Dry-Run Mode - v1.1.0
+Processore di file con supporto per elaborazione parallela multi-thread e modalità simulazione
 """
 
 from typing import List, Tuple, Optional, Dict, Any
@@ -20,7 +20,7 @@ from processing.file_utils import FileUtils
 
 class FileProcessor:
     """
-    Processore di file con supporto per elaborazione parallela multi-thread.
+    Processore di file con supporto per elaborazione parallela multi-thread e modalità dry-run.
     Gestisce scansione, estrazione metadati, organizzazione e tracking database.
     """
     
@@ -35,10 +35,11 @@ class FileProcessor:
         photographic_prefixes: List[str] = None,
         exclude_hidden_dirs: bool = True,
         exclude_patterns: List[str] = None,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
+        dry_run: bool = False  # NUOVO: flag per modalità simulazione
     ):
         """
-        Inizializza il processore di file con configurazione parallela.
+        Inizializza il processore di file con configurazione parallela e dry-run.
         
         Args:
             source_dir: Directory sorgente da scansionare
@@ -51,6 +52,7 @@ class FileProcessor:
             exclude_hidden_dirs: Se escludere directory nascoste
             exclude_patterns: Pattern aggiuntivi da escludere
             max_workers: Numero massimo di worker (auto-detect se None)
+            dry_run: Se True, simula le operazioni senza modifiche reali
         """
         self.source_dir = Path(source_dir)
         self.dest_dir = Path(dest_dir)
@@ -61,6 +63,7 @@ class FileProcessor:
         self.photographic_prefixes = photographic_prefixes or []
         self.exclude_hidden_dirs = exclude_hidden_dirs
         self.exclude_patterns = exclude_patterns or []
+        self.dry_run = dry_run  # NUOVO
         
         # Auto CPU detection con override manuale
         self.max_workers = max_workers or self._detect_optimal_workers()
@@ -87,7 +90,8 @@ class FileProcessor:
             'videos_organized': 0
         }
         
-        logging.info(f"FileProcessor inizializzato con {self.max_workers} worker threads")
+        mode_str = " (DRY-RUN)" if self.dry_run else ""
+        logging.info(f"FileProcessor inizializzato con {self.max_workers} worker threads{mode_str}")
 
     def _detect_optimal_workers(self) -> int:
         """
@@ -133,7 +137,8 @@ class FileProcessor:
         """
         Scansiona la directory sorgente e processa tutti i file supportati in parallelo.
         """
-        logging.info(f"Inizio scansione directory: {self.source_dir}")
+        mode_str = " (modalità DRY-RUN)" if self.dry_run else ""
+        logging.info(f"Inizio scansione directory{mode_str}: {self.source_dir}")
         
         # Prima fase: raccolta file con reporting dettagliato
         files_to_process = self._collect_files()
@@ -144,8 +149,12 @@ class FileProcessor:
             return
         
         self.stats['total_files'] = len(files_to_process)
-        logging.info(f"Trovati {len(files_to_process)} file da processare")
-        print(f"[INFO] Trovati {len(files_to_process)} file da processare con {self.max_workers} thread paralleli")
+        logging.info(f"Trovati {len(files_to_process)} file da processare{mode_str}")
+        
+        if self.dry_run:
+            print(f"[DRY-RUN] Trovati {len(files_to_process)} file da simulare con {self.max_workers} thread paralleli")
+        else:
+            print(f"[INFO] Trovati {len(files_to_process)} file da processare con {self.max_workers} thread paralleli")
         
         # Seconda fase: processing parallelo
         self._process_files_parallel(files_to_process)
@@ -167,14 +176,15 @@ class FileProcessor:
         skipped_files = 0
         unsupported_files = 0
         
-        print("[SCAN] Scansione directory in corso...")
+        mode_str = "[DRY-RUN] " if self.dry_run else ""
+        print(f"{mode_str}[SCAN] Scansione directory in corso...")
         
         try:
             # Raccoglie tutti gli item per conteggio accurato
             all_items = list(self.source_dir.rglob("*"))
             total_items = len(all_items)
             
-            print(f"[SCAN] Trovati {total_items} item totali da analizzare...")
+            print(f"{mode_str}[SCAN] Trovati {total_items} item totali da analizzare...")
             
             for root_path in all_items:
                 if self._should_skip_path(root_path):
@@ -195,13 +205,17 @@ class FileProcessor:
             raise
         
         # Report dettagliato scansione
-        print(f"[STATS] Risultati scansione:")
+        print(f"{mode_str}[STATS] Risultati scansione:")
         print(f"   [FILES] Item totali scansionati: {total_items}")
         print(f"   [SUCCESS] File supportati trovati: {len(files_to_process)}")
         print(f"   [SKIP] Directory ignorate: {skipped_dirs}")
         print(f"   [SKIP] File ignorati (pattern): {skipped_files}")
         print(f"   [SKIP] File non supportati: {unsupported_files}")
-        print(f"   [TARGET] File da processare: {len(files_to_process)}")
+        
+        if self.dry_run:
+            print(f"   [SIMULATION] File da simulare: {len(files_to_process)}")
+        else:
+            print(f"   [TARGET] File da processare: {len(files_to_process)}")
         print()
         
         return files_to_process
@@ -210,9 +224,13 @@ class FileProcessor:
         """
         Processa i file in parallelo con progress tracking elegante.
         """
-        logging.info(f"Inizio processing parallelo con {self.max_workers} workers")
+        mode_str = " (DRY-RUN)" if self.dry_run else ""
+        logging.info(f"Inizio processing parallelo{mode_str} con {self.max_workers} workers")
         
-        print(f"[START] Inizio processing {len(files)} file con {self.max_workers} worker paralleli...")
+        if self.dry_run:
+            print(f"[DRY-RUN] Inizio simulazione {len(files)} file con {self.max_workers} worker paralleli...")
+        else:
+            print(f"[START] Inizio processing {len(files)} file con {self.max_workers} worker paralleli...")
         
         completed = 0
         total = len(files)
@@ -241,7 +259,7 @@ class FileProcessor:
                         if result['status'] == 'duplicate':
                             self._duplicate_count += 1
                             self.stats['duplicate_files'] += 1
-                        elif result['status'] == 'copied':
+                        elif result['status'] == 'copied' or result['status'] == 'simulated':
                             if result['media_type'] == 'PHOTO':
                                 self.stats['photos_organized'] += 1
                             else:
@@ -253,7 +271,11 @@ class FileProcessor:
                     
                     # Progress elegante con sovrascrittura
                     percent = (completed / total) * 100
-                    progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    
+                    if self.dry_run:
+                        progress_msg = f"Simulazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    else:
+                        progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
                     
                     # Sovrascrive la stessa riga
                     sys.stdout.write(f"\r{progress_msg}")
@@ -269,12 +291,19 @@ class FileProcessor:
                         self._last_processed_file = f"ERROR: {file_path.name}"
                     
                     percent = (completed / total) * 100
-                    progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    if self.dry_run:
+                        progress_msg = f"Simulazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    else:
+                        progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    
                     sys.stdout.write(f"\r{progress_msg}")
                     sys.stdout.flush()
         
         # Nuova riga dopo il completamento
-        print(f"\n[SUCCESS] Processing completato: {completed} file elaborati")
+        if self.dry_run:
+            print(f"\n[DRY-RUN] Simulazione completata: {completed} file analizzati")
+        else:
+            print(f"\n[SUCCESS] Processing completato: {completed} file elaborati")
 
     def _process_single_file(self, file_path: Path) -> Dict[str, Any]:
         """
@@ -309,7 +338,7 @@ class FileProcessor:
                 year, month = "Unknown", "Unknown"
                 logging.warning(f"Data non estratta per {file_path}")
             
-            # Organizza il file
+            # Organizza il file (o simula in modalità dry-run)
             result = self._organize_file(
                 file_path, media_type, year, month, file_hash, conn
             )
@@ -334,7 +363,7 @@ class FileProcessor:
         conn
     ) -> str:
         """
-        Organizza un singolo file nella struttura di destinazione.
+        Organizza un singolo file nella struttura di destinazione (o simula in dry-run).
         
         Args:
             file_path: Path del file originale
@@ -345,7 +374,7 @@ class FileProcessor:
             conn: Connessione database thread-safe
             
         Returns:
-            str: Status dell'operazione (copied/duplicate/error)
+            str: Status dell'operazione (copied/duplicate/error/simulated)
         """
         try:
             # Determina directory di destinazione
@@ -354,19 +383,35 @@ class FileProcessor:
             else:
                 dest_dir = self.dest_dir / media_type / year / month
             
-            # Crea directory se necessaria
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            
             # Controlla duplicati
-            if self._is_duplicate(file_hash, conn):
-                duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
-                duplicate_dir.mkdir(parents=True, exist_ok=True)
-                final_path = FileUtils.safe_copy(file_path, duplicate_dir, file_path.name)
-                status = "duplicate"
+            is_duplicate = self._is_duplicate(file_hash, conn)
+            
+            if self.dry_run:
+                # MODALITÀ DRY-RUN: simula senza modifiche reali
+                if is_duplicate:
+                    duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
+                    final_path = duplicate_dir / file_path.name
+                    status = "duplicate"
+                    
+                    logging.info(f"[DRY-RUN] Duplicato rilevato: {file_path} -> {final_path}")
+                else:
+                    final_path = dest_dir / file_path.name
+                    status = "simulated"
+                    
+                    logging.info(f"[DRY-RUN] File da organizzare: {file_path} -> {final_path}")
             else:
-                # Copia il file
-                final_path = FileUtils.safe_copy(file_path, dest_dir, file_path.name)
-                status = "copied"
+                # MODALITÀ REALE: esegue le operazioni
+                if is_duplicate:
+                    duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
+                    duplicate_dir.mkdir(parents=True, exist_ok=True)
+                    final_path = FileUtils.safe_copy(file_path, duplicate_dir, file_path.name)
+                    status = "duplicate"
+                else:
+                    # Crea directory se necessaria
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    # Copia il file
+                    final_path = FileUtils.safe_copy(file_path, dest_dir, file_path.name)
+                    status = "copied"
             
             # Thread-safe database insert
             with self._db_lock:
@@ -441,7 +486,9 @@ class FileProcessor:
 
     def _print_final_stats(self):
         """Stampa statistiche finali dell'elaborazione."""
-        logging.info("Statistiche finali:")
+        mode_str = " (DRY-RUN)" if self.dry_run else ""
+        
+        logging.info(f"Statistiche finali{mode_str}:")
         logging.info(f"   File totali trovati: {self.stats['total_files']}")
         logging.info(f"   File processati: {self.stats['processed_files']}")
         logging.info(f"   Foto organizzate: {self.stats['photos_organized']}")
@@ -449,11 +496,22 @@ class FileProcessor:
         logging.info(f"   File duplicati: {self.stats['duplicate_files']}")
         logging.info(f"   Errori: {self.stats['error_files']}")
         
-        print("\n[STATS] Riepilogo Elaborazione:")
-        print(f"[SUCCESS] File processati: {self.stats['processed_files']}")
-        print(f"[PHOTO] Foto organizzate: {self.stats['photos_organized']}")
-        print(f"[VIDEO] Video organizzati: {self.stats['videos_organized']}")
-        print(f"[DUP] Duplicati gestiti: {self.stats['duplicate_files']}")
-        if self.stats['error_files'] > 0:
-            print(f"[ERROR] Errori: {self.stats['error_files']}")
-        print(f"[THREADS] Elaborazione parallela completata con {self.max_workers} worker")
+        if self.dry_run:
+            print(f"\n[DRY-RUN] Riepilogo Simulazione:")
+            print(f"[ANALYSIS] File analizzati: {self.stats['processed_files']}")
+            print(f"[PHOTO] Foto da organizzare: {self.stats['photos_organized']}")
+            print(f"[VIDEO] Video da organizzare: {self.stats['videos_organized']}")
+            print(f"[DUP] Duplicati rilevati: {self.stats['duplicate_files']}")
+            if self.stats['error_files'] > 0:
+                print(f"[ERROR] Errori: {self.stats['error_files']}")
+            print(f"[INFO] Simulazione parallela completata con {self.max_workers} worker")
+            print(f"[INFO] Per eseguire realmente, rimuovi il flag --dry-run")
+        else:
+            print("\n[STATS] Riepilogo Elaborazione:")
+            print(f"[SUCCESS] File processati: {self.stats['processed_files']}")
+            print(f"[PHOTO] Foto organizzate: {self.stats['photos_organized']}")
+            print(f"[VIDEO] Video organizzati: {self.stats['videos_organized']}")
+            print(f"[DUP] Duplicati gestiti: {self.stats['duplicate_files']}")
+            if self.stats['error_files'] > 0:
+                print(f"[ERROR] Errori: {self.stats['error_files']}")
+            print(f"[THREADS] Elaborazione parallela completata con {self.max_workers} worker")

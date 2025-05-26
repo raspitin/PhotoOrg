@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Photo and Video Organizer with Parallel Processing - v1.0.0
+Photo and Video Organizer with Parallel Processing - v1.1.0
 Organizza foto e video con processing parallelo multi-thread
 """
 
@@ -32,7 +32,7 @@ def setup_minimal_logging():
 def validate_config(config: Dict[str, Any]) -> None:
     """
     Valida che la configurazione contenga tutte le chiavi richieste.
-    Include validazione per configurazioni di parallelismo.
+    Include validazione per configurazioni di parallelismo e controllo sorgente=destinazione.
     
     Args:
         config: Dizionario di configurazione da validare
@@ -50,12 +50,52 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError(f"Chiavi di configurazione mancanti: {', '.join(missing_keys)}")
     
     # Verifica che i path esistano o siano creabili
-    source_path = Path(config["source"])
+    source_path = Path(config["source"]).resolve()
     if not source_path.exists():
         raise ValueError(f"Directory sorgente non trovata: {source_path}")
     
     if not source_path.is_dir():
         raise ValueError(f"Il percorso sorgente non è una directory: {source_path}")
+    
+    # NUOVO: Controllo che sorgente e destinazione non coincidano
+    dest_path = Path(config["destination"]).resolve()
+    if source_path == dest_path:
+        raise ValueError(
+            f"ERRORE CRITICO: Directory sorgente e destinazione sono identiche!\n"
+            f"Sorgente: {source_path}\n"
+            f"Destinazione: {dest_path}\n"
+            f"Questo potrebbe causare perdita di dati. Specificare una destinazione diversa."
+        )
+    
+    # Controllo che la destinazione non sia una sottodirectory della sorgente
+    try:
+        dest_path.relative_to(source_path)
+        raise ValueError(
+            f"ERRORE CRITICO: La destinazione è una sottodirectory della sorgente!\n"
+            f"Sorgente: {source_path}\n"
+            f"Destinazione: {dest_path}\n"
+            f"Questo potrebbe causare perdita di dati o loop infiniti."
+        )
+    except ValueError as e:
+        # Se relative_to fallisce, è OK (destinazione non è dentro sorgente)
+        if "ERRORE CRITICO" in str(e):
+            raise  # Re-raise se è il nostro errore critico
+        pass  # Altrimenti continua
+    
+    # Controllo che la sorgente non sia una sottodirectory della destinazione
+    if dest_path.exists():
+        try:
+            source_path.relative_to(dest_path)
+            raise ValueError(
+                f"ERRORE CRITICO: La sorgente è una sottodirectory della destinazione!\n"
+                f"Sorgente: {source_path}\n"
+                f"Destinazione: {dest_path}\n"
+                f"Configurazione non valida."
+            )
+        except ValueError as e:
+            if "ERRORE CRITICO" in str(e):
+                raise
+            pass
     
     # Verifica che la directory sorgente sia accessibile in lettura
     try:
@@ -66,7 +106,6 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError(f"Errore di accesso alla directory sorgente '{source_path}': {e}")
     
     # Verifica directory di destinazione se esiste
-    dest_path = Path(config["destination"])
     if dest_path.exists():
         if not dest_path.is_dir():
             raise ValueError(f"Il percorso di destinazione esiste ma non è una directory: {dest_path}")
@@ -106,7 +145,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     if "exclude_patterns" in config and not isinstance(config["exclude_patterns"], list):
         raise ValueError("'exclude_patterns' deve essere una lista")
     
-    print("[SUCCESS] Configurazione validata con successo (incluse opzioni parallelismo)")
+    print("[SUCCESS] Configurazione validata con successo (incluse opzioni parallelismo e sicurezza path)")
 
 
 def determine_worker_count(config: Dict[str, Any]) -> int:
@@ -134,12 +173,13 @@ def determine_worker_count(config: Dict[str, Any]) -> int:
     return optimal_workers
 
 
-def create_destination_directory(dest_dir: Path) -> bool:
+def create_destination_directory(dest_dir: Path, dry_run: bool = False) -> bool:
     """
     Gestisce la creazione della directory di destinazione con gestione errori robusta.
     
     Args:
         dest_dir: Path della directory di destinazione
+        dry_run: Se True, simula solo la creazione
         
     Returns:
         bool: True se la directory esiste o è stata creata, False altrimenti
@@ -153,6 +193,11 @@ def create_destination_directory(dest_dir: Path) -> bool:
         return True
     
     try:
+        if dry_run:
+            print(f"[DRY-RUN] Dovrei creare la directory: {dest_dir}")
+            logging.info(f"[DRY-RUN] Simulazione creazione directory: {dest_dir}")
+            return True
+        
         response = input(f"La directory di destinazione '{dest_dir}' non esiste. Vuoi crearla? [s/N]: ").strip().lower()
         if response == "s":
             dest_dir.mkdir(parents=True, exist_ok=True)
@@ -291,32 +336,39 @@ def initialize_logging(config: Dict[str, Any]) -> None:
         logging.info("Continuo con il logging di base")
 
 
-def initialize_database(config: Dict[str, Any]) -> Optional[DatabaseManager]:
+def initialize_database(config: Dict[str, Any], dry_run: bool = False) -> Optional[DatabaseManager]:
     """
     Inizializza il database manager con gestione errori.
     
     Args:
         config: Dizionario di configurazione
+        dry_run: Se True, usa database in memoria per simulazione
         
     Returns:
         DatabaseManager istanziato o None in caso di errore
     """
     try:
-        db_manager = DatabaseManager(config["database"])
-        logging.info("Database manager thread-safe inizializzato")
+        if dry_run:
+            # In modalità dry-run usa database in memoria
+            db_manager = DatabaseManager(":memory:")
+            logging.info("Database manager thread-safe inizializzato (modalità DRY-RUN - database in memoria)")
+        else:
+            db_manager = DatabaseManager(config["database"])
+            logging.info("Database manager thread-safe inizializzato")
         return db_manager
     except Exception as e:
         logging.error(f"Errore durante l'inizializzazione del database: {e}")
         return None
 
 
-def initialize_file_processor(config: Dict[str, Any], db_manager: DatabaseManager) -> Optional[FileProcessor]:
+def initialize_file_processor(config: Dict[str, Any], db_manager: DatabaseManager, dry_run: bool = False) -> Optional[FileProcessor]:
     """
     Inizializza il processore dei file con gestione errori e supporto parallelo.
     
     Args:
         config: Dizionario di configurazione
         db_manager: Istanza del database manager
+        dry_run: Se True, attiva modalità simulazione
         
     Returns:
         FileProcessor istanziato o None in caso di errore
@@ -334,54 +386,82 @@ def initialize_file_processor(config: Dict[str, Any], db_manager: DatabaseManage
             photographic_prefixes=config.get("photographic_prefixes", []),
             exclude_hidden_dirs=config.get("exclude_hidden_dirs", True),
             exclude_patterns=config.get("exclude_patterns", []),
-            max_workers=max_workers
+            max_workers=max_workers,
+            dry_run=dry_run  # NUOVO: passa il flag dry_run
         )
-        logging.info(f"File processor inizializzato con {max_workers} worker paralleli")
+        logging.info(f"File processor inizializzato con {max_workers} worker paralleli (dry_run={dry_run})")
         return file_processor
     except Exception as e:
         logging.error(f"Errore durante l'inizializzazione del file processor: {e}")
         return None
 
 
-def print_system_info(config: Dict[str, Any], worker_count: int):
+def print_system_info(config: Dict[str, Any], worker_count: int, dry_run: bool = False):
     """
     Stampa informazioni di sistema e configurazione.
     
     Args:
         config: Configurazione completa
         worker_count: Numero di worker configurati
+        dry_run: Se True, indica modalità simulazione
     """
     parallel_enabled = config.get("parallel_processing", {}).get("enabled", True)
     cpu_count = os.cpu_count() or "N/A"
     
-    print(f"\n[START] Photo and Video Organizer - Processing Parallelo v1.0.0")
+    mode_str = " [MODALITÀ DRY-RUN]" if dry_run else ""
+    print(f"\n[START] Photo and Video Organizer - Processing Parallelo v1.1.0{mode_str}")
+    
+    if dry_run:
+        print(f"[DRY-RUN] MODALITÀ SIMULAZIONE ATTIVA - Nessuna modifica reale ai file")
+        print(f"[DRY-RUN] Database temporaneo in memoria")
+        print(f"[DRY-RUN] I file saranno solo analizzati, non spostati")
+        print("-" * 60)
+    
     print(f"[SYS] CPU disponibili: {cpu_count}")
     print(f"[THREADS] Worker thread: {worker_count}")
     print(f"[INFO] Processing parallelo: {'ABILITATO' if parallel_enabled else 'DISABILITATO'}")
     print(f"[FILES] Directory sorgente: {config['source']}")
     print(f"[FILES] Directory destinazione: {config['destination']}")
-    print(f"[DB] Database: {config['database']}")
+    
+    if not dry_run:
+        print(f"[DB] Database: {config['database']}")
+    else:
+        print(f"[DB] Database: :memory: (simulazione)")
+    
     print("-" * 60)
 
 
-def generate_final_report(db_manager: DatabaseManager, processing_time: float):
+def generate_final_report(db_manager: DatabaseManager, processing_time: float, dry_run: bool = False):
     """
     Genera e mostra un report finale delle operazioni.
     
     Args:
         db_manager: Manager database
         processing_time: Tempo di processing in secondi
+        dry_run: Se True, indica modalità simulazione
     """
     try:
         stats = db_manager.get_statistics()
         
-        print(f"\n[STATS] REPORT FINALE - Processing completato in {processing_time:.2f} secondi")
+        mode_str = " [DRY-RUN]" if dry_run else ""
+        print(f"\n[STATS] REPORT FINALE{mode_str} - Processing completato in {processing_time:.2f} secondi")
+        
+        if dry_run:
+            print("[DRY-RUN] ATTENZIONE: Nessuna modifica reale ai file è stata effettuata!")
+        
         print("=" * 60)
         print(f"[FILES] File totali processati: {stats['general']['total_files']}")
-        print(f"[SUCCESS] File organizzati: {stats['general']['processed_files']}")
-        print(f"[PHOTO] Foto: {stats['general']['photos']}")
-        print(f"[VIDEO] Video: {stats['general']['videos']}")
-        print(f"[DUP] Duplicati gestiti: {stats['general']['duplicate_files']}")
+        
+        if dry_run:
+            print(f"[SIMULAZIONE] File che sarebbero stati organizzati: {stats['general']['processed_files']}")
+            print(f"[SIMULAZIONE] Foto da organizzare: {stats['general']['photos']}")
+            print(f"[SIMULAZIONE] Video da organizzare: {stats['general']['videos']}")
+            print(f"[SIMULAZIONE] Duplicati rilevati: {stats['general']['duplicate_files']}")
+        else:
+            print(f"[SUCCESS] File organizzati: {stats['general']['processed_files']}")
+            print(f"[PHOTO] Foto: {stats['general']['photos']}")
+            print(f"[VIDEO] Video: {stats['general']['videos']}")
+            print(f"[DUP] Duplicati gestiti: {stats['general']['duplicate_files']}")
         
         if stats['general']['error_files'] > 0:
             print(f"[ERROR] Errori: {stats['general']['error_files']}")
@@ -397,6 +477,9 @@ def generate_final_report(db_manager: DatabaseManager, processing_time: float):
         
         print("=" * 60)
         
+        if dry_run:
+            print("[DRY-RUN] Per eseguire realmente le operazioni, rimuovi il flag --dry-run")
+        
     except Exception as e:
         logging.error(f"Errore generazione report finale: {e}")
         print(f"[ERROR] Errore nella generazione del report: {e}")
@@ -410,11 +493,12 @@ def parse_arguments():
         argparse.Namespace: Argomenti parsati
     """
     parser = argparse.ArgumentParser(
-        description="Photo and Video Organizer con Processing Parallelo v1.0.0",
+        description="Photo and Video Organizer con Processing Parallelo v1.1.0",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Esempi di utilizzo:
   python3 PhotoOrg.py              # Esegue l'organizzazione dei file
+  python3 PhotoOrg.py --dry-run    # Simula l'organizzazione senza modifiche
   python3 PhotoOrg.py --reset      # Reset completo dell'ambiente
   
 Per maggiori informazioni consulta README.md
@@ -428,9 +512,15 @@ Per maggiori informazioni consulta README.md
     )
     
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Modalità simulazione: analizza i file senza effettuare modifiche reali"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
-        version="PhotoOrg v1.0.0"
+        version="PhotoOrg v1.1.0"
     )
     
     return parser.parse_args()
@@ -479,31 +569,37 @@ def main():
         reset_environment(config["database"], config["log"], config["destination"])
         return
     
+    # Flag dry-run
+    dry_run = args.dry_run
+    if dry_run:
+        print("[DRY-RUN] Modalità simulazione attivata - nessuna modifica reale sarà effettuata")
+        logging.info("Modalità DRY-RUN attivata")
+    
     # Determina configurazione parallelismo
     worker_count = determine_worker_count(config)
     
     # Mostra info sistema
-    print_system_info(config, worker_count)
+    print_system_info(config, worker_count, dry_run)
     
     # Inizializza il logging completo
     initialize_logging(config)
     
     # Verifica/crea la directory di destinazione
     dest_dir = Path(config["destination"])
-    if not create_destination_directory(dest_dir):
+    if not create_destination_directory(dest_dir, dry_run):
         logging.error("Impossibile procedere senza directory di destinazione")
         print("[ERROR] Operazione annullata. Impossibile procedere senza directory di destinazione.")
         return
     
     # Inizializza il database manager
-    db_manager = initialize_database(config)
+    db_manager = initialize_database(config, dry_run)
     if db_manager is None:
         logging.error("Impossibile procedere senza database manager")
         print("[ERROR] Errore critico: impossibile inizializzare il database.")
         return
     
     # Inizializza il processore dei file
-    file_processor = initialize_file_processor(config, db_manager)
+    file_processor = initialize_file_processor(config, db_manager, dry_run)
     if file_processor is None:
         logging.error("Impossibile procedere senza file processor")
         print("[ERROR] Errore critico: impossibile inizializzare il processore dei file.")
@@ -512,17 +608,21 @@ def main():
     # Scansiona la directory di origine e processa i file
     start_time = time.time()
     try:
-        logging.info("Inizio scansione e processing parallelo della directory sorgente")
+        if dry_run:
+            logging.info("Inizio scansione e simulazione processing parallelo della directory sorgente")
+        else:
+            logging.info("Inizio scansione e processing parallelo della directory sorgente")
+        
         file_processor.scan_directory()
         
         processing_time = time.time() - start_time
         logging.info(f"Processing completato in {processing_time:.2f} secondi")
         
         # Genera report finale
-        generate_final_report(db_manager, processing_time)
+        generate_final_report(db_manager, processing_time, dry_run)
         
-        # Ottimizza database se configurato
-        if config.get("database_config", {}).get("vacuum_on_completion", True):
+        # Ottimizza database se configurato (solo in modalità reale)
+        if not dry_run and config.get("database_config", {}).get("vacuum_on_completion", True):
             print("[CLEAN] Ottimizzazione database...")
             db_manager.cleanup_database()
         
@@ -531,7 +631,7 @@ def main():
         logging.warning(f"Operazione interrotta dall'utente dopo {processing_time:.2f} secondi")
         print(f"\n[WARN] Operazione interrotta dall'utente dopo {processing_time:.2f} secondi.")
         try:
-            generate_final_report(db_manager, processing_time)
+            generate_final_report(db_manager, processing_time, dry_run)
         except:
             pass
     except PermissionError as e:
@@ -545,7 +645,7 @@ def main():
         logging.error(f"Errore imprevisto durante la scansione: {e}")
         print(f"[ERROR] Errore durante la scansione della directory: {e}")
         try:
-            generate_final_report(db_manager, processing_time)
+            generate_final_report(db_manager, processing_time, dry_run)
         except:
             pass
 

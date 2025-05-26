@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Thread-Safe DatabaseManager - v1.0.0
+Thread-Safe DatabaseManager - v1.1.0 con supporto dry-run
 Manager database thread-safe per gestire operazioni SQLite concorrenti
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 class DatabaseManager:
     """
     Manager database thread-safe per gestire operazioni SQLite concorrenti.
-    Supporta connessioni multiple e operazioni atomiche.
+    Supporta connessioni multiple e operazioni atomiche, incluso database in memoria per dry-run.
     """
     
     def __init__(self, db_path: str):
@@ -22,41 +22,59 @@ class DatabaseManager:
         Inizializza il database manager con supporto thread-safe.
         
         Args:
-            db_path: Percorso del file database SQLite
+            db_path: Percorso del file database SQLite o ":memory:" per database in memoria
         """
         self.db_path = db_path
+        self.is_memory_db = db_path == ":memory:"
         self._global_lock = threading.Lock()
         self._initialized = False
+        self._memory_db_conn = None
         
-        # Assicura che la directory del database esista
-        db_file = Path(db_path)
-        db_file.parent.mkdir(parents=True, exist_ok=True)
+        if not self.is_memory_db:
+            db_file = Path(db_path)
+            db_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        if self.is_memory_db:
+            with self._global_lock:
+                self._memory_db_conn = self._create_memory_connection()
+                self._initialize_schema(self._memory_db_conn)
+                self._initialized = True
         
         logging.info(f"DatabaseManager inizializzato: {db_path}")
 
-    def create_db(self) -> sqlite3.Connection:
-        """
-        Crea una connessione database thread-safe con schema inizializzato.
-        
-        Returns:
-            sqlite3.Connection: Connessione database configurata per thread-safety
-        """
-        # Configurazione SQLite per thread-safety
+    def _create_memory_connection(self) -> sqlite3.Connection:
+        """Crea connessione database in memoria."""
         conn = sqlite3.connect(
-            self.db_path,
-            check_same_thread=False,  # Permette uso da thread diversi
-            timeout=30.0,  # Timeout per lock contention
-            isolation_level='DEFERRED'  # Transazioni ottimizzate
+            ":memory:",
+            check_same_thread=False,
+            timeout=30.0,
+            isolation_level='DEFERRED'
         )
         
-        # Configura SQLite per prestazioni e concorrenza
-        conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging per concorrenza
-        conn.execute("PRAGMA synchronous=NORMAL")  # Bilanciamento sicurezza/prestazioni
-        conn.execute("PRAGMA temp_store=MEMORY")  # Tabelle temporanee in memoria
-        conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory mapping
-        conn.execute("PRAGMA cache_size=10000")  # Cache più grande
+        conn.execute("PRAGMA synchronous=MEMORY")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=10000")
         
-        # Inizializza schema solo una volta
+        return conn
+
+    def create_db(self) -> sqlite3.Connection:
+        """Crea connessione database."""
+        if self.is_memory_db:
+            return self._memory_db_conn
+        
+        conn = sqlite3.connect(
+            self.db_path,
+            check_same_thread=False,
+            timeout=30.0,
+            isolation_level='DEFERRED'
+        )
+        
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")
+        conn.execute("PRAGMA cache_size=10000")
+        
         with self._global_lock:
             if not self._initialized:
                 self._initialize_schema(conn)
@@ -65,15 +83,9 @@ class DatabaseManager:
         return conn
 
     def _initialize_schema(self, conn: sqlite3.Connection):
-        """
-        Inizializza lo schema del database con indici ottimizzati.
-        
-        Args:
-            conn: Connessione database
-        """
+        """Inizializza schema database."""
         cursor = conn.cursor()
         
-        # Tabella principale files
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +103,6 @@ class DatabaseManager:
             )
         """)
         
-        # Indici per prestazioni
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_files_hash 
             ON files(hash)
@@ -112,7 +123,6 @@ class DatabaseManager:
             ON files(original_path)
         """)
         
-        # Tabella statistiche processing
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS processing_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,20 +138,14 @@ class DatabaseManager:
         """)
         
         conn.commit()
-        logging.info("Schema database inizializzato con indici ottimizzati")
+        mode_str = " (in memoria)" if self.is_memory_db else ""
+        logging.info(f"Schema database inizializzato{mode_str}")
 
     def insert_file(self, conn: sqlite3.Connection, record: Tuple[str, ...]):
-        """
-        Inserisce thread-safe un record file nel database.
-        
-        Args:
-            conn: Connessione database thread-specific
-            record: Tupla con dati del file
-        """
+        """Inserisce record file."""
         cursor = conn.cursor()
         
         try:
-            # Aggiungi informazioni thread
             extended_record = record + (threading.get_ident(),)
             
             cursor.execute("""
@@ -154,245 +158,89 @@ class DatabaseManager:
             
             conn.commit()
             
-        except sqlite3.IntegrityError as e:
-            logging.error(f"Errore integrità database: {e}")
-            conn.rollback()
-            raise
-        except sqlite3.OperationalError as e:
-            logging.error(f"Errore operazionale database: {e}")
-            conn.rollback()
-            raise
         except Exception as e:
             logging.error(f"Errore inserimento database: {e}")
             conn.rollback()
             raise
 
-    def check_duplicate(self, conn: sqlite3.Connection, file_hash: str) -> bool:
-        """
-        Controlla thread-safe se un hash è già presente nel database.
-        
-        Args:
-            conn: Connessione database
-            file_hash: Hash del file da controllare
-            
-        Returns:
-            bool: True se il file è un duplicato
-        """
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM files WHERE hash = ?",
-            (file_hash,)
-        )
-        count = cursor.fetchone()[0]
-        return count > 0
-
-    def get_file_by_hash(self, conn: sqlite3.Connection, file_hash: str) -> Optional[Tuple]:
-        """
-        Recupera informazioni di un file tramite hash.
-        
-        Args:
-            conn: Connessione database
-            file_hash: Hash del file
-            
-        Returns:
-            Optional[Tuple]: Record del file o None se non trovato
-        """
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM files WHERE hash = ? LIMIT 1",
-            (file_hash,)
-        )
-        return cursor.fetchone()
-
-    def start_processing_session(self, total_files: int, worker_threads: int) -> int:
-        """
-        Inizia una nuova sessione di processing e ritorna l'ID sessione.
-        
-        Args:
-            total_files: Numero totale di file da processare
-            worker_threads: Numero di thread worker
-            
-        Returns:
-            int: ID della sessione
-        """
-        with self._global_lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                INSERT INTO processing_stats (total_files, worker_threads)
-                VALUES (?, ?)
-            """, (total_files, worker_threads))
-            
-            session_id = cursor.lastrowid
-            conn.commit()
-            conn.close()
-            
-            logging.info(f"Nuova sessione processing avviata: ID {session_id}")
-            return session_id
-
-    def update_processing_stats(
-        self,
-        session_id: int,
-        processed_files: int,
-        duplicate_files: int,
-        error_files: int
-    ):
-        """
-        Aggiorna statistiche della sessione di processing.
-        
-        Args:
-            session_id: ID della sessione
-            processed_files: File processati
-            duplicate_files: File duplicati
-            error_files: File con errori
-        """
-        with self._global_lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                UPDATE processing_stats 
-                SET processed_files = ?, duplicate_files = ?, error_files = ?
-                WHERE id = ?
-            """, (processed_files, duplicate_files, error_files, session_id))
-            
-            conn.commit()
-            conn.close()
-
-    def complete_processing_session(self, session_id: int, duration: float):
-        """
-        Completa una sessione di processing.
-        
-        Args:
-            session_id: ID della sessione
-            duration: Durata in secondi
-        """
-        with self._global_lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                UPDATE processing_stats 
-                SET session_duration = ?, completed_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (duration, session_id))
-            
-            conn.commit()
-            conn.close()
-            
-            logging.info(f"Sessione processing {session_id} completata in {duration:.2f}s")
-
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        Recupera statistiche complete dal database.
-        
-        Returns:
-            Dict[str, Any]: Statistiche complete
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Stats generali
-        cursor.execute("""
-            SELECT 
-                COUNT(*) as total_files,
-                COUNT(CASE WHEN status = 'copied' THEN 1 END) as processed,
-                COUNT(CASE WHEN status = 'duplicate' THEN 1 END) as duplicates,
-                COUNT(CASE WHEN status = 'error' THEN 1 END) as errors,
-                COUNT(CASE WHEN media_type = 'PHOTO' THEN 1 END) as photos,
-                COUNT(CASE WHEN media_type = 'VIDEO' THEN 1 END) as videos
-            FROM files
-        """)
-        
-        general_stats = cursor.fetchone()
-        
-        # Stats per anno
-        cursor.execute("""
-            SELECT year, COUNT(*) as count
-            FROM files 
-            WHERE year != 'Unknown'
-            GROUP BY year 
-            ORDER BY year DESC
-        """)
-        
-        yearly_stats = cursor.fetchall()
-        
-        # Ultima sessione
-        cursor.execute("""
-            SELECT * FROM processing_stats 
-            ORDER BY session_start DESC 
-            LIMIT 1
-        """)
-        
-        last_session = cursor.fetchone()
-        
-        conn.close()
-        
+        """Recupera statistiche database."""
+        try:
+            if self.is_memory_db:
+                if self._memory_db_conn is None:
+                    return self._empty_stats()
+                conn = self._memory_db_conn
+            else:
+                conn = sqlite3.connect(self.db_path)
+            
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_files,
+                    COUNT(CASE WHEN status = 'copied' OR status = 'simulated' THEN 1 END) as processed,
+                    COUNT(CASE WHEN status = 'duplicate' THEN 1 END) as duplicates,
+                    COUNT(CASE WHEN status = 'error' THEN 1 END) as errors,
+                    COUNT(CASE WHEN media_type = 'PHOTO' THEN 1 END) as photos,
+                    COUNT(CASE WHEN media_type = 'VIDEO' THEN 1 END) as videos
+                FROM files
+            """)
+            
+            general_stats = cursor.fetchone()
+            
+            cursor.execute("""
+                SELECT year, COUNT(*) as count
+                FROM files 
+                WHERE year != 'Unknown'
+                GROUP BY year 
+                ORDER BY year DESC
+            """)
+            
+            yearly_stats = cursor.fetchall()
+            
+            if not self.is_memory_db:
+                conn.close()
+            
+            return {
+                'general': {
+                    'total_files': general_stats[0],
+                    'processed_files': general_stats[1],
+                    'duplicate_files': general_stats[2],
+                    'error_files': general_stats[3],
+                    'photos': general_stats[4],
+                    'videos': general_stats[5]
+                },
+                'yearly': dict(yearly_stats),
+                'last_session': None
+            }
+        except Exception as e:
+            logging.error(f"Errore recupero statistiche: {e}")
+            return self._empty_stats()
+
+    def _empty_stats(self):
+        """Statistiche vuote."""
         return {
             'general': {
-                'total_files': general_stats[0],
-                'processed_files': general_stats[1],
-                'duplicate_files': general_stats[2],
-                'error_files': general_stats[3],
-                'photos': general_stats[4],
-                'videos': general_stats[5]
+                'total_files': 0,
+                'processed_files': 0,
+                'duplicate_files': 0,
+                'error_files': 0,
+                'photos': 0,
+                'videos': 0
             },
-            'yearly': dict(yearly_stats),
-            'last_session': last_session
+            'yearly': {},
+            'last_session': None
         }
 
     def cleanup_database(self):
-        """
-        Operazioni di pulizia e ottimizzazione del database.
-        """
+        """Pulizia database (solo per file)."""
+        if self.is_memory_db:
+            return
+            
         with self._global_lock:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Vacuum per ottimizzare spazio
             cursor.execute("VACUUM")
-            
-            # Analizza per aggiornare statistiche query optimizer
             cursor.execute("ANALYZE")
-            
             conn.close()
-            logging.info("Database ottimizzato e pulito")
-
-    def export_report(self, output_path: str):
-        """
-        Esporta un report dettagliato in formato CSV.
-        
-        Args:
-            output_path: Percorso file di output
-        """
-        import csv
-        
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                original_path,
-                hash,
-                year,
-                month,
-                media_type,
-                status,
-                destination_path,
-                final_name,
-                created_at
-            FROM files
-            ORDER BY created_at DESC
-        """)
-        
-        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow([
-                'Percorso Originale', 'Hash', 'Anno', 'Mese', 'Tipo Media',
-                'Status', 'Destinazione', 'Nome Finale', 'Data Processing'
-            ])
-            writer.writerows(cursor.fetchall())
-        
-        conn.close()
-        logging.info(f"Report esportato: {output_path}")
+            logging.info("Database ottimizzato")
