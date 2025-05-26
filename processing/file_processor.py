@@ -6,6 +6,7 @@ Processore di file con supporto per elaborazione parallela multi-thread
 
 from typing import List, Tuple, Optional, Dict, Any
 import os
+import sys
 import logging
 import threading
 from pathlib import Path
@@ -74,6 +75,7 @@ class FileProcessor:
         self._processed_count = 0
         self._error_count = 0
         self._duplicate_count = 0
+        self._last_processed_file = ""
         
         # Statistics
         self.stats = {
@@ -206,7 +208,7 @@ class FileProcessor:
 
     def _process_files_parallel(self, files: List[Path]):
         """
-        Processa i file in parallelo con progress tracking semplice.
+        Processa i file in parallelo con progress tracking elegante.
         """
         logging.info(f"Inizio processing parallelo con {self.max_workers} workers")
         
@@ -230,10 +232,11 @@ class FileProcessor:
                 try:
                     result = future.result()
                     
-                    # Aggiorna statistiche
+                    # Aggiorna statistiche thread-safe
                     with self._progress_lock:
                         completed += 1
                         self._processed_count += 1
+                        self._last_processed_file = file_path.name
                         
                         if result['status'] == 'duplicate':
                             self._duplicate_count += 1
@@ -248,10 +251,13 @@ class FileProcessor:
                             self._error_count += 1
                             self.stats['error_files'] += 1
                     
-                    # Mostra progresso
-                    if completed % 20 == 0 or completed == total or completed <= 10:
-                        percent = (completed / total) * 100
-                        print(f"[PROGRESS] {completed}/{total} ({percent:.1f}%) - Processati: {self.stats['processed_files']}, Duplicati: {self._duplicate_count}, Errori: {self._error_count}")
+                    # Progress elegante con sovrascrittura
+                    percent = (completed / total) * 100
+                    progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    
+                    # Sovrascrive la stessa riga
+                    sys.stdout.write(f"\r{progress_msg}")
+                    sys.stdout.flush()
                         
                 except Exception as e:
                     logging.error(f"Errore processing {file_path}: {e}")
@@ -260,12 +266,15 @@ class FileProcessor:
                         completed += 1
                         self._error_count += 1
                         self.stats['error_files'] += 1
+                        self._last_processed_file = f"ERROR: {file_path.name}"
                     
-                    if completed % 20 == 0 or completed == total:
-                        percent = (completed / total) * 100
-                        print(f"[PROGRESS] {completed}/{total} ({percent:.1f}%) - Processati: {self.stats['processed_files']}, Duplicati: {self._duplicate_count}, Errori: {self._error_count}")
+                    percent = (completed / total) * 100
+                    progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    sys.stdout.write(f"\r{progress_msg}")
+                    sys.stdout.flush()
         
-        print(f"[SUCCESS] Processing completato: {completed} file elaborati")
+        # Nuova riga dopo il completamento
+        print(f"\n[SUCCESS] Processing completato: {completed} file elaborati")
 
     def _process_single_file(self, file_path: Path) -> Dict[str, Any]:
         """

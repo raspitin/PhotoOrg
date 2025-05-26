@@ -15,6 +15,7 @@ import logging
 import shutil
 import time
 import os
+import argparse
 
 
 def setup_minimal_logging():
@@ -54,7 +55,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         raise ValueError(f"Directory sorgente non trovata: {source_path}")
     
     if not source_path.is_dir():
-        raise ValueError(f"Il percorso sorgente non Ë una directory: {source_path}")
+        raise ValueError(f"Il percorso sorgente non √® una directory: {source_path}")
     
     # Verifica che la directory sorgente sia accessibile in lettura
     try:
@@ -68,7 +69,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     dest_path = Path(config["destination"])
     if dest_path.exists():
         if not dest_path.is_dir():
-            raise ValueError(f"Il percorso di destinazione esiste ma non Ë una directory: {dest_path}")
+            raise ValueError(f"Il percorso di destinazione esiste ma non √® una directory: {dest_path}")
         
         try:
             test_file = dest_path / ".test_write_permission"
@@ -84,7 +85,7 @@ def validate_config(config: Dict[str, Any]) -> None:
         if not isinstance(config[ext_key], list):
             raise ValueError(f"'{ext_key}' deve essere una lista")
         if not config[ext_key]:
-            raise ValueError(f"'{ext_key}' non puÚ essere una lista vuota")
+            raise ValueError(f"'{ext_key}' non pu√≤ essere una lista vuota")
     
     # Verifica configurazioni di parallelismo
     if "parallel_processing" in config:
@@ -141,14 +142,14 @@ def create_destination_directory(dest_dir: Path) -> bool:
         dest_dir: Path della directory di destinazione
         
     Returns:
-        bool: True se la directory esiste o Ë stata creata, False altrimenti
+        bool: True se la directory esiste o √® stata creata, False altrimenti
     """
     if dest_dir.exists():
         if not dest_dir.is_dir():
-            logging.error(f"Il percorso di destinazione esiste ma non Ë una directory: {dest_dir}")
-            print(f"[ERROR] '{dest_dir}' esiste ma non Ë una directory.")
+            logging.error(f"Il percorso di destinazione esiste ma non √® una directory: {dest_dir}")
+            print(f"[ERROR] '{dest_dir}' esiste ma non √® una directory.")
             return False
-        logging.info(f"Directory di destinazione gi‡ esistente: {dest_dir}")
+        logging.info(f"Directory di destinazione gi√† esistente: {dest_dir}")
         return True
     
     try:
@@ -192,7 +193,7 @@ def reset_environment(database_path: str, log_path: str, dest_dir: str) -> None:
     """
     logging.info("Richiesta procedura di reset dell'ambiente")
     print("[RESET] ATTENZIONE: Procedura di Reset dell'Ambiente")
-    print("Questa operazione eliminer‡:")
+    print("Questa operazione eliminer√†:")
     print(f"  - Database: {database_path}")
     print(f"  - File di log: {log_path}")
     print(f"  - Directory: {dest_dir}/PHOTO")
@@ -401,11 +402,49 @@ def generate_final_report(db_manager: DatabaseManager, processing_time: float):
         print(f"[ERROR] Errore nella generazione del report: {e}")
 
 
+def parse_arguments():
+    """
+    Gestisce il parsing degli argomenti da linea di comando.
+    
+    Returns:
+        argparse.Namespace: Argomenti parsati
+    """
+    parser = argparse.ArgumentParser(
+        description="Photo and Video Organizer con Processing Parallelo v1.0.0",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Esempi di utilizzo:
+  python3 PhotoOrg.py              # Esegue l'organizzazione dei file
+  python3 PhotoOrg.py --reset      # Reset completo dell'ambiente
+  
+Per maggiori informazioni consulta README.md
+        """
+    )
+    
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Reset completo dell'ambiente (database, log, directory)"
+    )
+    
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="PhotoOrg v1.0.0"
+    )
+    
+    return parser.parse_args()
+
+
 def main():
     """
     Funzione principale con gestione completa degli errori e supporto parallelismo.
     """
     setup_minimal_logging()
+    
+    # Parse degli argomenti
+    args = parse_arguments()
+    
     print("[START] Avvio Photo and Video Organizer con Processing Parallelo")
     
     # Carica e valida la configurazione
@@ -413,8 +452,8 @@ def main():
         config = ConfigLoader.load_config()
         print("[SUCCESS] Configurazione caricata")
     except FileNotFoundError:
-        logging.error("Il file di configurazione 'config.yaml' non Ë stato trovato")
-        print("[ERROR] Il file di configurazione 'config.yaml' non Ë stato trovato.")
+        logging.error("Il file di configurazione 'config.yaml' non √® stato trovato")
+        print("[ERROR] Il file di configurazione 'config.yaml' non √® stato trovato.")
         return
     except Exception as e:
         logging.error(f"Errore durante il caricamento della configurazione: {e}")
@@ -433,9 +472,9 @@ def main():
         print(f"[ERROR] Errore durante la validazione della configurazione: {e}")
         return
     
-    # Modalit‡ di reset
-    if len(sys.argv) > 1 and sys.argv[1] == "--reset":
-        logging.info("Modalit‡ reset attivata")
+    # Modalit√† di reset
+    if args.reset:
+        logging.info("Modalit√† reset attivata")
         initialize_logging(config)
         reset_environment(config["database"], config["log"], config["destination"])
         return
