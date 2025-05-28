@@ -1,4 +1,4 @@
-# PhotoOrg v1.1.0
+# PhotoOrg v1.2.0
 
 **Production-ready parallel photo and video organizer with dry-run support**
 
@@ -20,7 +20,7 @@
 - **🔒 Thread-Safe Operations**: Concurrent file processing with database integrity
 - **⚙️ Configurable**: Extensive YAML configuration for all aspects
 
-## New in v1.1.0
+## New in v1.2.0
 
 ### 🧪 Dry-Run Mode
 Test your configuration and see exactly what would happen without touching any files:
