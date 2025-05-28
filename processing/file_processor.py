@@ -1,650 +1,517 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+FileProcessor with Parallel Processing Support and Dry-Run Mode - v1.1.0
+Processore di file con supporto per elaborazione parallela multi-thread e modalità simulazione
+"""
 
-import hashlib
-import logging
-import shutil
-from pathlib import Path
-from tqdm import tqdm
+from typing import List, Tuple, Optional, Dict, Any
+import os
 import sys
-import time
+import logging
+import threading
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
-from .date_extractor import DateExtractor
-from .file_utils import FileUtils
-from .hash_utils import HashUtils
+from processing.date_extractor import DateExtractor
+from processing.hash_utils import HashUtils
+from processing.file_utils import FileUtils
 
 
 class FileProcessor:
-    def __init__(self, source_dir, dest_dir, db_manager, supported_extensions, 
-                 image_extensions, video_extensions, photographic_prefixes,
-                 exclude_hidden_dirs=True, exclude_patterns=None, dry_run=False):
+    """
+    Processore di file con supporto per elaborazione parallela multi-thread e modalità dry-run.
+    Gestisce scansione, estrazione metadati, organizzazione e tracking database.
+    """
+    
+    def __init__(
+        self,
+        source_dir: str,
+        dest_dir: str,
+        db_manager,
+        supported_extensions: List[str],
+        image_extensions: List[str],
+        video_extensions: List[str],
+        photographic_prefixes: List[str] = None,
+        exclude_hidden_dirs: bool = True,
+        exclude_patterns: List[str] = None,
+        max_workers: Optional[int] = None,
+        dry_run: bool = False  # NUOVO: flag per modalità simulazione
+    ):
+        """
+        Inizializza il processore di file con configurazione parallela e dry-run.
+        
+        Args:
+            source_dir: Directory sorgente da scansionare
+            dest_dir: Directory di destinazione per l'organizzazione
+            db_manager: Manager database per il tracking
+            supported_extensions: Liste delle estensioni supportate
+            image_extensions: Estensioni specifiche per immagini
+            video_extensions: Estensioni specifiche per video
+            photographic_prefixes: Prefissi per identificare file fotografici
+            exclude_hidden_dirs: Se escludere directory nascoste
+            exclude_patterns: Pattern aggiuntivi da escludere
+            max_workers: Numero massimo di worker (auto-detect se None)
+            dry_run: Se True, simula le operazioni senza modifiche reali
+        """
         self.source_dir = Path(source_dir)
         self.dest_dir = Path(dest_dir)
         self.db_manager = db_manager
-        self.supported_extensions = supported_extensions
-        self.image_extensions = image_extensions
-        self.video_extensions = video_extensions
-        self.photographic_prefixes = photographic_prefixes
+        self.supported_extensions = [ext.lower() for ext in supported_extensions]
+        self.image_extensions = [ext.lower() for ext in image_extensions]
+        self.video_extensions = [ext.lower() for ext in video_extensions]
+        self.photographic_prefixes = photographic_prefixes or []
         self.exclude_hidden_dirs = exclude_hidden_dirs
         self.exclude_patterns = exclude_patterns or []
-        self.dry_run = dry_run
+        self.dry_run = dry_run  # NUOVO
         
-        # Solo crea connessione DB se NON e' dry-run
-        if not self.dry_run:
-            self.conn = self.db_manager.create_db()
-        else:
-            self.conn = None
-            # Per dry-run, simula il database con dizionario in memoria
-            self.mock_db = {}
+        # Auto CPU detection con override manuale
+        self.max_workers = max_workers or self._detect_optimal_workers()
         
-        # Contatori per il summary
+        # Thread-safe database connection pool
+        self._db_lock = threading.Lock()
+        self._connections = {}
+        self._connection_lock = threading.Lock()
+        
+        # Progress tracking
+        self._progress_lock = threading.Lock()
+        self._processed_count = 0
+        self._error_count = 0
+        self._duplicate_count = 0
+        self._last_processed_file = ""
+        
+        # Statistics
         self.stats = {
-            'migrated': 0,
-            'duplicates': 0,
-            'to_review': 0,
-            'unsupported': 0,
-            'total_processed': 0,
-            'total_size': 0,
-            'space_needed': 0
+            'total_files': 0,
+            'processed_files': 0,
+            'duplicate_files': 0,
+            'error_files': 0,
+            'photos_organized': 0,
+            'videos_organized': 0
         }
-        self.start_time = None
         
-        # Per dry-run: collezione di operazioni pianificate
-        self.planned_operations = []
+        mode_str = " (DRY-RUN)" if self.dry_run else ""
+        logging.info(f"FileProcessor inizializzato con {self.max_workers} worker threads{mode_str}")
+
+    def _detect_optimal_workers(self) -> int:
+        """
+        Rileva automaticamente il numero ottimale di worker thread.
+        
+        Returns:
+            int: Numero ottimale di worker thread
+        """
+        cpu_count = os.cpu_count() or 4
+        # Per I/O intensive tasks, usiamo più thread dei core disponibili
+        optimal_workers = min(cpu_count * 2, 16)  # Max 16 thread per evitare overhead
+        logging.info(f"CPU rilevati: {cpu_count}, worker ottimali: {optimal_workers}")
+        return optimal_workers
+
+    def _get_thread_connection(self):
+        """
+        Ottiene una connessione database thread-safe per il thread corrente.
+        
+        Returns:
+            sqlite3.Connection: Connessione database thread-safe
+        """
+        thread_id = threading.get_ident()
+        
+        with self._connection_lock:
+            if thread_id not in self._connections:
+                self._connections[thread_id] = self.db_manager.create_db()
+                logging.debug(f"Nuova connessione DB creata per thread {thread_id}")
+            
+            return self._connections[thread_id]
+
+    def _cleanup_connections(self):
+        """Chiude tutte le connessioni database thread-safe."""
+        with self._connection_lock:
+            for thread_id, conn in self._connections.items():
+                try:
+                    conn.close()
+                    logging.debug(f"Connessione DB chiusa per thread {thread_id}")
+                except Exception as e:
+                    logging.warning(f"Errore chiusura connessione thread {thread_id}: {e}")
+            self._connections.clear()
 
     def scan_directory(self):
-        """Scansiona ricorsivamente la directory di origine e processa i file."""
-        logging.info(f"Inizio scansione della directory: {self.source_dir}")
-        self.start_time = time.time()  # Inizia il timer
+        """
+        Scansiona la directory sorgente e processa tutti i file supportati in parallelo.
+        """
+        mode_str = " (modalità DRY-RUN)" if self.dry_run else ""
+        logging.info(f"Inizio scansione directory{mode_str}: {self.source_dir}")
         
-        # Debug: conta tutti i file
-        all_files = list(self._get_all_files())
-        supported_files = list(self._get_supported_files())
-        unsupported_files = list(self._get_unsupported_files())
+        # Prima fase: raccolta file con reporting dettagliato
+        files_to_process = self._collect_files()
         
-        print(f"Debug - File totali trovati: {len(all_files)}")
-        print(f"Debug - File supportati: {len(supported_files)}")
-        print(f"Debug - File non supportati: {len(unsupported_files)}")
-        print(f"Debug - File esclusi: {len(all_files) - len(supported_files) - len(unsupported_files)}")
-        
-        self.stats['unsupported'] = len(unsupported_files)
-        
-        # Processa anche i file non supportati per registrarli
-        if not self.dry_run:
-            print(f"\nRegistrazione file non supportati...")
-            for file_path in unsupported_files:
-                self._handle_unsupported_file(file_path)
-        else:
-            print(f"\nAnalisi file non supportati...")
-            for file_path in unsupported_files:
-                self._analyze_unsupported_file(file_path)
-        
-        if len(supported_files) == 0:
-            print("Nessun file supportato da elaborare.")
-            logging.info("Nessun file con estensioni supportate trovato.")
-            self._print_summary()
+        if not files_to_process:
+            logging.warning("Nessun file trovato da processare")
+            print("[WARN] Nessun file trovato nella directory sorgente.")
             return
         
-        print(f"\nTrovati {len(supported_files)} file da elaborare")
-        logging.info(f"Trovati {len(supported_files)} file da elaborare")
-        
-        # Progress bar configurata per dry-run o normale
-        action = "Analizzando" if self.dry_run else "Elaborazione"
-        with tqdm(total=len(supported_files), 
-                 desc=action, 
-                 unit="file",
-                 dynamic_ncols=True,
-                 leave=True,
-                 bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
-            
-            # Processa i file uno alla volta
-            for file_path in supported_files:
-                try:
-                    # Aggiorna solo il nome del file corrente (troncato)
-                    filename = file_path.name
-                    if len(filename) > 30:
-                        filename = filename[:27] + "..."
-                    pbar.set_description(f"-> {filename}")
-                    
-                    # Processa il file (dry-run o normale)
-                    if self.dry_run:
-                        self._analyze_file(file_path)
-                    else:
-                        self._process_file_quiet(file_path)
-                    
-                    # Aggiorna progress bar
-                    pbar.update(1)
-                    
-                except Exception as e:
-                    # Solo errori critici visibili
-                    tqdm.write(f"Errore {file_path.name}: {str(e)}")
-                    logging.error(f"Errore durante l'elaborazione di {file_path}: {e}")
-                    pbar.update(1)
+        self.stats['total_files'] = len(files_to_process)
+        logging.info(f"Trovati {len(files_to_process)} file da processare{mode_str}")
         
         if self.dry_run:
-            print("\n=== ANTEPRIMA OPERAZIONI COMPLETATA ===")
-            self._print_dry_run_preview()
+            print(f"[DRY-RUN] Trovati {len(files_to_process)} file da simulare con {self.max_workers} thread paralleli")
         else:
-            print("\nElaborazione completata!")
+            print(f"[INFO] Trovati {len(files_to_process)} file da processare con {self.max_workers} thread paralleli")
         
-        logging.info("Scansione completata.")
+        # Seconda fase: processing parallelo
+        self._process_files_parallel(files_to_process)
         
-        # Mostra il summary finale
-        self._print_summary()
+        # Cleanup finale
+        self._cleanup_connections()
+        self._print_final_stats()
 
-    def _analyze_file(self, file_path):
-        """Analizza un file in modalita' dry-run senza modifiche."""
-        logging.info(f"Analisi file: {file_path}")
+    def _collect_files(self) -> List[Path]:
+        """
+        Raccoglie tutti i file validi da processare con reporting dettagliato.
         
-        # Calcola size del file
+        Returns:
+            List[Path]: Lista dei file da processare
+        """
+        files_to_process = []
+        total_items = 0
+        skipped_dirs = 0
+        skipped_files = 0
+        unsupported_files = 0
+        
+        mode_str = "[DRY-RUN] " if self.dry_run else ""
+        print(f"{mode_str}[SCAN] Scansione directory in corso...")
+        
         try:
-            file_size = file_path.stat().st_size
-            self.stats['total_size'] += file_size
-        except OSError:
-            file_size = 0
+            # Raccoglie tutti gli item per conteggio accurato
+            all_items = list(self.source_dir.rglob("*"))
+            total_items = len(all_items)
+            
+            print(f"{mode_str}[SCAN] Trovati {total_items} item totali da analizzare...")
+            
+            for root_path in all_items:
+                if self._should_skip_path(root_path):
+                    if root_path.is_dir():
+                        skipped_dirs += 1
+                    else:
+                        skipped_files += 1
+                    continue
+                
+                if root_path.is_file():
+                    if self._is_supported_file(root_path):
+                        files_to_process.append(root_path)
+                    else:
+                        unsupported_files += 1
+                        
+        except Exception as e:
+            logging.error(f"Errore durante la raccolta file: {e}")
+            raise
         
-        # Calcola hash del file (necessario per check duplicati)
-        _, file_hash = HashUtils.compute_hash(file_path)
+        # Report dettagliato scansione
+        print(f"{mode_str}[STATS] Risultati scansione:")
+        print(f"   [FILES] Item totali scansionati: {total_items}")
+        print(f"   [SUCCESS] File supportati trovati: {len(files_to_process)}")
+        print(f"   [SKIP] Directory ignorate: {skipped_dirs}")
+        print(f"   [SKIP] File ignorati (pattern): {skipped_files}")
+        print(f"   [SKIP] File non supportati: {unsupported_files}")
         
-        # Simula controllo duplicati
-        if file_hash in self.mock_db:
-            # File duplicato trovato
-            self._analyze_duplicate(file_path, file_hash, file_size)
+        if self.dry_run:
+            print(f"   [SIMULATION] File da simulare: {len(files_to_process)}")
         else:
-            # File nuovo
-            self._analyze_new_file(file_path, file_hash, file_size)
-            # Aggiungi al mock database
-            self.mock_db[file_hash] = str(file_path)
-
-    def _analyze_new_file(self, file_path, file_hash, file_size):
-        """Analizza un nuovo file in modalita' dry-run."""
-        # Estrai data
-        date_info = DateExtractor.extract_date(
-            file_path, 
-            self.image_extensions, 
-            self.video_extensions
-        )
+            print(f"   [TARGET] File da processare: {len(files_to_process)}")
+        print()
         
-        if date_info:
-            year, month, _ = date_info
-            media_type = self._get_media_type(file_path)
-            
-            # Calcola percorso di destinazione
-            dest_dir = self.dest_dir / media_type / year / month
-            dest_file_path = dest_dir / file_path.name
-            
-            # Pianifica operazione
-            operation = {
-                'type': 'migrate',
-                'source': str(file_path),
-                'destination': str(dest_file_path),
-                'media_type': media_type,
-                'year': year,
-                'month': month,
-                'size': file_size
+        return files_to_process
+
+    def _process_files_parallel(self, files: List[Path]):
+        """
+        Processa i file in parallelo con progress tracking elegante.
+        """
+        mode_str = " (DRY-RUN)" if self.dry_run else ""
+        logging.info(f"Inizio processing parallelo{mode_str} con {self.max_workers} workers")
+        
+        if self.dry_run:
+            print(f"[DRY-RUN] Inizio simulazione {len(files)} file con {self.max_workers} worker paralleli...")
+        else:
+            print(f"[START] Inizio processing {len(files)} file con {self.max_workers} worker paralleli...")
+        
+        completed = 0
+        total = len(files)
+        
+        # ThreadPoolExecutor per worker management  
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Sottometti tutti i task
+            future_to_file = {
+                executor.submit(self._process_single_file, file_path): file_path
+                for file_path in files
             }
-            self.planned_operations.append(operation)
             
-            # Aggiorna statistiche
-            self.stats['migrated'] += 1
-            self.stats['total_processed'] += 1
-            self.stats['space_needed'] += file_size
-            
-            logging.info(f"Pianificato: {file_path} -> {dest_file_path}")
+            # Processa i risultati man mano che completano
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                
+                try:
+                    result = future.result()
+                    
+                    # Aggiorna statistiche thread-safe
+                    with self._progress_lock:
+                        completed += 1
+                        self._processed_count += 1
+                        self._last_processed_file = file_path.name
+                        
+                        if result['status'] == 'duplicate':
+                            self._duplicate_count += 1
+                            self.stats['duplicate_files'] += 1
+                        elif result['status'] == 'copied' or result['status'] == 'simulated':
+                            if result['media_type'] == 'PHOTO':
+                                self.stats['photos_organized'] += 1
+                            else:
+                                self.stats['videos_organized'] += 1
+                            self.stats['processed_files'] += 1
+                        elif result['status'] == 'error':
+                            self._error_count += 1
+                            self.stats['error_files'] += 1
+                    
+                    # Progress elegante con sovrascrittura
+                    percent = (completed / total) * 100
+                    
+                    if self.dry_run:
+                        progress_msg = f"Simulazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    else:
+                        progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    
+                    # Sovrascrive la stessa riga
+                    sys.stdout.write(f"\r{progress_msg}")
+                    sys.stdout.flush()
+                        
+                except Exception as e:
+                    logging.error(f"Errore processing {file_path}: {e}")
+                    
+                    with self._progress_lock:
+                        completed += 1
+                        self._error_count += 1
+                        self.stats['error_files'] += 1
+                        self._last_processed_file = f"ERROR: {file_path.name}"
+                    
+                    percent = (completed / total) * 100
+                    if self.dry_run:
+                        progress_msg = f"Simulazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    else:
+                        progress_msg = f"Elaborazione: {completed}/{total} ({percent:.1f}%) - Ultimo file: {self._last_processed_file}"
+                    
+                    sys.stdout.write(f"\r{progress_msg}")
+                    sys.stdout.flush()
+        
+        # Nuova riga dopo il completamento
+        if self.dry_run:
+            print(f"\n[DRY-RUN] Simulazione completata: {completed} file analizzati")
         else:
-            # File senza data estraibile
-            self._analyze_no_date_file(file_path, file_hash, file_size)
+            print(f"\n[SUCCESS] Processing completato: {completed} file elaborati")
 
-    def _analyze_duplicate(self, file_path, file_hash, file_size):
-        """Analizza un file duplicato in modalita' dry-run."""
-        media_type = self._get_media_type(file_path)
-        duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
-        dest_file_path = duplicate_dir / file_path.name
+    def _process_single_file(self, file_path: Path) -> Dict[str, Any]:
+        """
+        Processa un singolo file in modo thread-safe.
         
-        # Pianifica operazione
-        operation = {
-            'type': 'duplicate',
-            'source': str(file_path),
-            'destination': str(dest_file_path),
-            'media_type': media_type,
-            'size': file_size,
-            'original': self.mock_db[file_hash]
-        }
-        self.planned_operations.append(operation)
-        
-        # Aggiorna statistiche
-        self.stats['duplicates'] += 1
-        self.stats['total_processed'] += 1
-        # I duplicati non occupano spazio aggiuntivo
-        
-        logging.info(f"Duplicato identificato: {file_path} (originale: {self.mock_db[file_hash]})")
-
-    def _analyze_no_date_file(self, file_path, file_hash, file_size):
-        """Analizza file senza data estraibile in modalita' dry-run."""
-        review_dir = self.dest_dir / "ToReview"
-        dest_file_path = review_dir / file_path.name
-        
-        # Pianifica operazione
-        operation = {
-            'type': 'review',
-            'source': str(file_path),
-            'destination': str(dest_file_path),
-            'media_type': self._get_media_type(file_path),
-            'size': file_size
-        }
-        self.planned_operations.append(operation)
-        
-        # Aggiorna statistiche
-        self.stats['to_review'] += 1
-        self.stats['total_processed'] += 1
-        self.stats['space_needed'] += file_size
-        
-        logging.info(f"Da rivedere: {file_path} -> {dest_file_path}")
-
-    def _analyze_unsupported_file(self, file_path):
-        """Analizza un file non supportato in modalita' dry-run."""
+        Args:
+            file_path: Path del file da processare
+            
+        Returns:
+            Dict[str, Any]: Risultato del processing
+        """
         try:
-            file_size = file_path.stat().st_size
-            self.stats['total_size'] += file_size
-        except OSError:
-            pass
-        
-        logging.info(f"File non supportato identificato: {file_path}")
-
-    def _print_dry_run_preview(self):
-        """Stampa l'anteprima dettagliata delle operazioni pianificate."""
-        print("\n" + "="*60)
-        print("ANTEPRIMA OPERAZIONI (DRY-RUN)")
-        print("="*60)
-        
-        if not self.planned_operations:
-            print("Nessuna operazione pianificata.")
-            return
-        
-        # Raggruppa operazioni per tipo
-        migrate_ops = [op for op in self.planned_operations if op['type'] == 'migrate']
-        duplicate_ops = [op for op in self.planned_operations if op['type'] == 'duplicate']
-        review_ops = [op for op in self.planned_operations if op['type'] == 'review']
-        
-        # Mostra operazioni di migrazione (prime 10)
-        if migrate_ops:
-            print(f"\nFile da migrare ({len(migrate_ops)}):")
-            for i, op in enumerate(migrate_ops[:10]):
-                size_mb = op['size'] / (1024*1024)
-                print(f"  {op['source']}")
-                print(f"    -> {op['destination']} ({size_mb:.1f} MB)")
-            if len(migrate_ops) > 10:
-                print(f"    ... e altri {len(migrate_ops)-10} file")
-        
-        # Mostra duplicati (prime 5)
-        if duplicate_ops:
-            print(f"\nDuplicati identificati ({len(duplicate_ops)}):")
-            for i, op in enumerate(duplicate_ops[:5]):
-                size_mb = op['size'] / (1024*1024)
-                print(f"  {op['source']} ({size_mb:.1f} MB)")
-                print(f"    -> DUPLICATO di: {op['original']}")
-            if len(duplicate_ops) > 5:
-                print(f"    ... e altri {len(duplicate_ops)-5} duplicati")
-        
-        # Mostra file da rivedere (prime 5)
-        if review_ops:
-            print(f"\nFile da rivedere ({len(review_ops)}):")
-            for i, op in enumerate(review_ops[:5]):
-                size_mb = op['size'] / (1024*1024)
-                print(f"  {op['source']} ({size_mb:.1f} MB)")
-                print(f"    -> {op['destination']} (data non estraibile)")
-            if len(review_ops) > 5:
-                print(f"    ... e altri {len(review_ops)-5} file")
-        
-        # Statistiche spazio
-        total_mb = self.stats['total_size'] / (1024*1024)
-        needed_mb = self.stats['space_needed'] / (1024*1024)
-        saved_mb = total_mb - needed_mb
-        
-        print(f"\nSpazio:")
-        print(f"  Totale file analizzati: {total_mb:.1f} MB")
-        print(f"  Spazio necessario: {needed_mb:.1f} MB")
-        print(f"  Spazio risparmiato (duplicati): {saved_mb:.1f} MB")
-
-    def _process_file_quiet(self, file_path):
-        """Processa un singolo file senza output su console."""
-        # Log solo su file, NON su console
-        logging.info(f"Elaborazione file: {file_path}")
-        
-        # Calcola hash del file
-        _, file_hash = HashUtils.compute_hash(file_path)
-        
-        # Controlla duplicati nel database
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM files WHERE hash = ?", (file_hash,))
-        existing = cursor.fetchone()
-        
-        if existing:
-            # File duplicato trovato
-            self._handle_duplicate_quiet(file_path, file_hash)
-        else:
-            # File nuovo
-            self._handle_new_file_quiet(file_path, file_hash)
-
-    def _handle_new_file_quiet(self, file_path, file_hash):
-        """Gestisce un nuovo file senza output su console."""
-        # Estrai data
-        date_info = DateExtractor.extract_date(
-            file_path, 
-            self.image_extensions, 
-            self.video_extensions
-        )
-        
-        if date_info:
-            year, month, _ = date_info
-            media_type = self._get_media_type(file_path)
+            # Ottieni connessione thread-safe
+            conn = self._get_thread_connection()
             
-            # Crea directory di destinazione
-            dest_dir = self.dest_dir / media_type / year / month
-            dest_dir.mkdir(parents=True, exist_ok=True)
+            # Estrai metadati
+            media_type = "PHOTO" if file_path.suffix.lower() in self.image_extensions else "VIDEO"
             
-            # Copia il file
-            dest_file = FileUtils.safe_copy(file_path, dest_dir, file_path.name)
+            # Calcola hash per rilevamento duplicati
+            _, file_hash = HashUtils.compute_hash(file_path)
             
-            # Registra nel database
-            record = (
-                str(file_path),
-                file_hash,
-                year,
-                month,
-                media_type,
-                "processed",
-                str(dest_dir),
-                dest_file.name
+            # Estrai data
+            date_info = DateExtractor.extract_date(
+                file_path,
+                self.image_extensions,
+                self.video_extensions
             )
-            self.db_manager.insert_file(self.conn, record)
             
-            # Aggiorna statistiche
-            self.stats['migrated'] += 1
-            self.stats['total_processed'] += 1
+            if date_info:
+                year, month, _ = date_info
+            else:
+                year, month = "Unknown", "Unknown"
+                logging.warning(f"Data non estratta per {file_path}")
             
-            # Log solo su file
-            logging.info(f"File processato: {file_path} -> {dest_file}")
-        else:
-            # Se non si riesce a estrarre la data, sposta in ToReview
-            self._handle_no_date_file_quiet(file_path, file_hash)
+            # Organizza il file (o simula in modalità dry-run)
+            result = self._organize_file(
+                file_path, media_type, year, month, file_hash, conn
+            )
+            
+            return {
+                'status': result,
+                'media_type': media_type,
+                'file_path': str(file_path)
+            }
+            
+        except Exception as e:
+            logging.error(f"Errore processing file {file_path}: {e}")
+            raise
 
-    def _handle_duplicate_quiet(self, file_path, file_hash):
-        """Gestisce un file duplicato senza output su console."""
-        media_type = self._get_media_type(file_path)
-        duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
-        duplicate_dir.mkdir(parents=True, exist_ok=True)
+    def _organize_file(
+        self,
+        file_path: Path,
+        media_type: str,
+        year: str,
+        month: str,
+        file_hash: str,
+        conn
+    ) -> str:
+        """
+        Organizza un singolo file nella struttura di destinazione (o simula in dry-run).
         
-        # Copia il file nella cartella duplicati
-        dest_file = FileUtils.safe_copy(file_path, duplicate_dir, file_path.name)
-        
-        # Registra nel database
-        record = (
-            str(file_path),
-            file_hash,
-            None,  # year
-            None,  # month
-            media_type,
-            "duplicate",
-            str(duplicate_dir),
-            dest_file.name
-        )
-        self.db_manager.insert_file(self.conn, record)
-        
-        # Aggiorna statistiche
-        self.stats['duplicates'] += 1
-        self.stats['total_processed'] += 1
-        
-        # Log solo su file
-        logging.info(f"Duplicato gestito: {file_path} -> {dest_file}")
+        Args:
+            file_path: Path del file originale
+            media_type: Tipo di media (PHOTO/VIDEO)
+            year: Anno estratto
+            month: Mese estratto  
+            file_hash: Hash del file per duplicati
+            conn: Connessione database thread-safe
+            
+        Returns:
+            str: Status dell'operazione (copied/duplicate/error/simulated)
+        """
+        try:
+            # Determina directory di destinazione
+            if year == "Unknown" or month == "Unknown":
+                dest_dir = self.dest_dir / "ToReview" / media_type
+            else:
+                dest_dir = self.dest_dir / media_type / year / month
+            
+            # Controlla duplicati
+            is_duplicate = self._is_duplicate(file_hash, conn)
+            
+            if self.dry_run:
+                # MODALITÀ DRY-RUN: simula senza modifiche reali
+                if is_duplicate:
+                    duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
+                    final_path = duplicate_dir / file_path.name
+                    status = "duplicate"
+                    
+                    logging.info(f"[DRY-RUN] Duplicato rilevato: {file_path} -> {final_path}")
+                else:
+                    final_path = dest_dir / file_path.name
+                    status = "simulated"
+                    
+                    logging.info(f"[DRY-RUN] File da organizzare: {file_path} -> {final_path}")
+            else:
+                # MODALITÀ REALE: esegue le operazioni
+                if is_duplicate:
+                    duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
+                    duplicate_dir.mkdir(parents=True, exist_ok=True)
+                    final_path = FileUtils.safe_copy(file_path, duplicate_dir, file_path.name)
+                    status = "duplicate"
+                else:
+                    # Crea directory se necessaria
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    # Copia il file
+                    final_path = FileUtils.safe_copy(file_path, dest_dir, file_path.name)
+                    status = "copied"
+            
+            # Thread-safe database insert
+            with self._db_lock:
+                record = (
+                    str(file_path),
+                    file_hash,
+                    year,
+                    month,
+                    media_type,
+                    status,
+                    str(final_path),
+                    final_path.name
+                )
+                self.db_manager.insert_file(conn, record)
+            
+            return status
+            
+        except Exception as e:
+            logging.error(f"Errore organizzazione file {file_path}: {e}")
+            return "error"
 
-    def _handle_no_date_file_quiet(self, file_path, file_hash):
-        """Gestisce file senza data estraibile senza output su console."""
-        review_dir = self.dest_dir / "ToReview"
-        review_dir.mkdir(parents=True, exist_ok=True)
+    def _is_duplicate(self, file_hash: str, conn) -> bool:
+        """
+        Controlla se un file è un duplicato basandosi sull'hash.
         
-        dest_file = FileUtils.safe_copy(file_path, review_dir, file_path.name)
-        
-        record = (
-            str(file_path),
-            file_hash,
-            None,
-            None,
-            self._get_media_type(file_path),
-            "to_review",
-            str(review_dir),
-            dest_file.name
-        )
-        self.db_manager.insert_file(self.conn, record)
-        
-        # Aggiorna statistiche
-        self.stats['to_review'] += 1
-        self.stats['total_processed'] += 1
-        
-        # Log solo su file
-        logging.info(f"File senza data: {file_path} -> {dest_file}")
+        Args:
+            file_hash: Hash del file da controllare
+            conn: Connessione database
+            
+        Returns:
+            bool: True se è un duplicato
+        """
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM files WHERE hash = ?", (file_hash,))
+        count = cursor.fetchone()[0]
+        return count > 0
 
-    def _get_all_files(self):
-        """Generatore che restituisce tutti i file (per debug)."""
-        for file_path in self.source_dir.rglob("*"):
-            if file_path.is_file():
-                yield file_path
-                
-    def _get_supported_files(self):
-        """Generatore che restituisce i file con estensioni supportate."""
-        for file_path in self.source_dir.rglob("*"):
-            # Salta i file nelle directory nascoste (che iniziano con .)
-            if self._is_hidden_path(file_path):
-                continue
-                
-            if file_path.is_file() and file_path.suffix.lower() in self.supported_extensions:
-                yield file_path
-
-    def _get_unsupported_files(self):
-        """Generatore che restituisce i file con estensioni non supportate."""
-        for file_path in self.source_dir.rglob("*"):
-            # Salta i file nelle directory nascoste (che iniziano con .)
-            if self._is_hidden_path(file_path):
-                continue
-                
-            if file_path.is_file() and file_path.suffix.lower() not in self.supported_extensions:
-                yield file_path
-    
-    def _is_hidden_path(self, path):
-        """Verifica se il path contiene directory nascoste o pattern da escludere"""
-        # Controlla se l'esclusione delle directory nascoste e' abilitata
-        if self.exclude_hidden_dirs:
-            # Controlla se qualsiasi parte del percorso (tranne la root) inizia con '.'
-            for part in path.parts:
-                if part.startswith('.') and part != '.':
-                    return True
+    def _should_skip_path(self, path: Path) -> bool:
+        """
+        Determina se un path deve essere saltato.
         
-        # Controlla pattern di esclusione aggiuntivi
+        Args:
+            path: Path da verificare
+            
+        Returns:
+            bool: True se deve essere saltato
+        """
+        # Salta directory nascoste se configurato
+        if self.exclude_hidden_dirs and any(
+            part.startswith('.') for part in path.parts
+        ):
+            return True
+        
+        # Salta pattern specificati
         for pattern in self.exclude_patterns:
             if pattern in str(path):
                 return True
-                
+        
         return False
 
-    def _handle_unsupported_file(self, file_path):
-        """Gestisce un file con estensione non supportata."""
-        # Calcola hash del file
-        _, file_hash = HashUtils.compute_hash(file_path)
+    def _is_supported_file(self, file_path: Path) -> bool:
+        """
+        Verifica se un file è supportato.
         
-        # Registra nel database
-        record = (
-            str(file_path),
-            file_hash,
-            None,  # year
-            None,  # month
-            "UNSUPPORTED",  # media_type
-            "unsupported",  # status
-            None,  # destination_path
-            None   # final_name
-        )
-        self.db_manager.insert_file(self.conn, record)
-        
-        logging.info(f"File non supportato registrato: {file_path}")
+        Args:
+            file_path: Path del file
+            
+        Returns:
+            bool: True se supportato
+        """
+        return file_path.suffix.lower() in self.supported_extensions
 
-    def _print_summary(self):
-        """Stampa il riepilogo finale dell'elaborazione."""
-        end_time = time.time()
-        total_time = end_time - self.start_time
+    def _print_final_stats(self):
+        """Stampa statistiche finali dell'elaborazione."""
+        mode_str = " (DRY-RUN)" if self.dry_run else ""
         
-        # Calcola minuti e secondi
-        minutes = int(total_time // 60)
-        seconds = total_time % 60
-        
-        print(f"\n{'='*50}")
-        if self.dry_run:
-            print("RIEPILOGO ANTEPRIMA (DRY-RUN)")
-        else:
-            print("RIEPILOGO OPERAZIONI")
-        print("="*50)
-        
-        print(f"  File migrati: {self.stats['migrated']}")
-        print(f"  File duplicati: {self.stats['duplicates']}")
-        print(f"  File da rivedere: {self.stats['to_review']}")
-        print(f"  File non supportati: {self.stats['unsupported']}")
-        print(f"  Totale file processati: {self.stats['total_processed']}")
-        
-        if self.dry_run and 'total_size' in self.stats:
-            total_gb = self.stats['total_size'] / (1024*1024*1024)
-            needed_gb = self.stats['space_needed'] / (1024*1024*1024)
-            print(f"  Spazio totale: {total_gb:.2f} GB")
-            print(f"  Spazio necessario: {needed_gb:.2f} GB")
-        
-        print(f"  Tempo totale: {minutes} min {seconds:.2f} sec")
+        logging.info(f"Statistiche finali{mode_str}:")
+        logging.info(f"   File totali trovati: {self.stats['total_files']}")
+        logging.info(f"   File processati: {self.stats['processed_files']}")
+        logging.info(f"   Foto organizzate: {self.stats['photos_organized']}")
+        logging.info(f"   Video organizzati: {self.stats['videos_organized']}")
+        logging.info(f"   File duplicati: {self.stats['duplicate_files']}")
+        logging.info(f"   Errori: {self.stats['error_files']}")
         
         if self.dry_run:
-            print("\nUsa senza --dry-run per eseguire le operazioni realmente")
-        
-        # Log anche nel file di log
-        mode = "DRY-RUN" if self.dry_run else "EXEC"
-        logging.info(f"Summary [{mode}] - Migrated: {self.stats['migrated']}, Duplicates: {self.stats['duplicates']}, "
-                    f"To Review: {self.stats['to_review']}, Unsupported: {self.stats['unsupported']}, "
-                    f"Total Processed: {self.stats['total_processed']}, Time: {minutes}m {seconds:.2f}s")
-
-    def _process_file(self, file_path):
-        """Processa un singolo file."""
-        logging.info(f"Elaborazione file: {file_path}")
-        
-        # Calcola hash del file
-        _, file_hash = HashUtils.compute_hash(file_path)
-        
-        # Controlla duplicati nel database
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM files WHERE hash = ?", (file_hash,))
-        existing = cursor.fetchone()
-        
-        if existing:
-            # File duplicato trovato
-            self._handle_duplicate(file_path, file_hash)
+            print(f"\n[DRY-RUN] Riepilogo Simulazione:")
+            print(f"[ANALYSIS] File analizzati: {self.stats['processed_files']}")
+            print(f"[PHOTO] Foto da organizzare: {self.stats['photos_organized']}")
+            print(f"[VIDEO] Video da organizzare: {self.stats['videos_organized']}")
+            print(f"[DUP] Duplicati rilevati: {self.stats['duplicate_files']}")
+            if self.stats['error_files'] > 0:
+                print(f"[ERROR] Errori: {self.stats['error_files']}")
+            print(f"[INFO] Simulazione parallela completata con {self.max_workers} worker")
+            print(f"[INFO] Per eseguire realmente, rimuovi il flag --dry-run")
         else:
-            # File nuovo
-            self._handle_new_file(file_path, file_hash)
-
-    def _handle_duplicate(self, file_path, file_hash):
-        """Gestisce un file duplicato."""
-        media_type = self._get_media_type(file_path)
-        duplicate_dir = self.dest_dir / f"{media_type}_DUPLICATES"
-        duplicate_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copia il file nella cartella duplicati
-        dest_file = FileUtils.safe_copy(file_path, duplicate_dir, file_path.name)
-        
-        # Registra nel database
-        record = (
-            str(file_path),
-            file_hash,
-            None,  # year
-            None,  # month
-            media_type,
-            "duplicate",
-            str(duplicate_dir),
-            dest_file.name
-        )
-        self.db_manager.insert_file(self.conn, record)
-        
-        # Aggiorna statistiche
-        self.stats['duplicates'] += 1
-        self.stats['total_processed'] += 1
-        
-        logging.info(f"Duplicato gestito: {file_path} -> {dest_file}")
-
-    def _handle_new_file(self, file_path, file_hash):
-        """Gestisce un nuovo file."""
-        # Estrai data
-        date_info = DateExtractor.extract_date(
-            file_path, 
-            self.image_extensions, 
-            self.video_extensions
-        )
-        
-        if date_info:
-            year, month, _ = date_info
-            media_type = self._get_media_type(file_path)
-            
-            # Crea directory di destinazione
-            dest_dir = self.dest_dir / media_type / year / month
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Copia il file
-            dest_file = FileUtils.safe_copy(file_path, dest_dir, file_path.name)
-            
-            # Registra nel database
-            record = (
-                str(file_path),
-                file_hash,
-                year,
-                month,
-                media_type,
-                "processed",
-                str(dest_dir),
-                dest_file.name
-            )
-            self.db_manager.insert_file(self.conn, record)
-            
-            # Aggiorna statistiche
-            self.stats['migrated'] += 1
-            self.stats['total_processed'] += 1
-            
-            logging.info(f"File processato: {file_path} -> {dest_file}")
-        else:
-            # Se non si riesce a estrarre la data, sposta in ToReview
-            self._handle_no_date_file(file_path, file_hash)
-
-    def _handle_no_date_file(self, file_path, file_hash):
-        """Gestisce file senza data estraibile."""
-        review_dir = self.dest_dir / "ToReview"
-        review_dir.mkdir(parents=True, exist_ok=True)
-        
-        dest_file = FileUtils.safe_copy(file_path, review_dir, file_path.name)
-        
-        record = (
-            str(file_path),
-            file_hash,
-            None,
-            None,
-            self._get_media_type(file_path),
-            "to_review",
-            str(review_dir),
-            dest_file.name
-        )
-        self.db_manager.insert_file(self.conn, record)
-        
-        # Aggiorna statistiche
-        self.stats['to_review'] += 1
-        self.stats['total_processed'] += 1
-        
-        logging.info(f"File senza data: {file_path} -> {dest_file}")
-
-    def _get_media_type(self, file_path):
-        """Determina il tipo di media in base all'estensione."""
-        suffix = file_path.suffix.lower()
-        if suffix in self.image_extensions:
-            return "PHOTO"
-        elif suffix in self.video_extensions:
-            return "VIDEO"
-        return "UNKNOWN"
+            print("\n[STATS] Riepilogo Elaborazione:")
+            print(f"[SUCCESS] File processati: {self.stats['processed_files']}")
+            print(f"[PHOTO] Foto organizzate: {self.stats['photos_organized']}")
+            print(f"[VIDEO] Video organizzati: {self.stats['videos_organized']}")
+            print(f"[DUP] Duplicati gestiti: {self.stats['duplicate_files']}")
+            if self.stats['error_files'] > 0:
+                print(f"[ERROR] Errori: {self.stats['error_files']}")
+            print(f"[THREADS] Elaborazione parallela completata con {self.max_workers} worker")
