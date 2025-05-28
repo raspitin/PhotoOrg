@@ -5,6 +5,39 @@ All notable changes to PhotoOrg will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-01-27
+## Added
+
+**Enhanced Configuration System**
+Extended parallel processing configuration options
+Performance tuning parameters for large collections
+Memory management and optimization settings
+Advanced error handling configuration
+
+**Improved Performance Monitoring**
+Enhanced real-time statistics display
+Better progress reporting with thread information
+Detailed performance metrics in final reports
+Session-based processing tracking improvements
+
+**Production Enhancements**
+Improved error recovery and handling
+Better memory usage optimization
+Enhanced database connection management
+Refined logging with thread-safe operations
+
+**Changed**
+Updated documentation for production deployment
+Improved configuration validation and error messages
+Enhanced progress display formatting
+Optimized database operations for better performance
+
+**Fixed**
+
+Thread-safe database operations improvements
+Memory leak prevention in long-running sessions
+Better error handling for problematic files
+Enhanced stability for large file collections
 ## [1.1.0] - 2025-01-23
 
 ### Added
@@ -59,8 +92,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New troubleshooting section for path validation
 - Command-line examples and best practices
 - Performance benchmarks including dry-run metrics
-
-## [1.0.0] - 2025-01-XX
 
 ## [1.0.0] - 2025-01-XX
 
