@@ -2,7 +2,7 @@
 
 **Production-ready parallel photo and video organizer with dry-run support**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/raspitin/PhotoOrg/releases/tag/v1.1.0)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/raspitin/PhotoOrg/releases/tag/v1.2.0)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 
