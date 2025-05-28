@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Photo and Video Organizer with Parallel Processing - v1.1.0
+Photo and Video Organizer with Parallel Processing - v1.2.0
 Organizza foto e video con processing parallelo multi-thread
 """
 
@@ -409,7 +409,7 @@ def print_system_info(config: Dict[str, Any], worker_count: int, dry_run: bool =
     cpu_count = os.cpu_count() or "N/A"
     
     mode_str = " [MODALITÀ DRY-RUN]" if dry_run else ""
-    print(f"\n[START] Photo and Video Organizer - Processing Parallelo v1.1.0{mode_str}")
+    print(f"\n[START] Photo and Video Organizer - Processing Parallelo v1.2.0{mode_str}")
     
     if dry_run:
         print(f"[DRY-RUN] MODALITÀ SIMULAZIONE ATTIVA - Nessuna modifica reale ai file")
@@ -493,7 +493,7 @@ def parse_arguments():
         argparse.Namespace: Argomenti parsati
     """
     parser = argparse.ArgumentParser(
-        description="Photo and Video Organizer con Processing Parallelo v1.1.0",
+        description="Photo and Video Organizer con Processing Parallelo v1.2.0",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Esempi di utilizzo:
@@ -520,7 +520,7 @@ Per maggiori informazioni consulta README.md
     parser.add_argument(
         "--version",
         action="version",
-        version="PhotoOrg v1.1.0"
+        version="PhotoOrg v1.2.0"
     )
     
     return parser.parse_args()
