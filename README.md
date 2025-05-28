@@ -1,4 +1,4 @@
-# PhotoOrg v1.1.0
+# PhotoOrg v1.2.0
 
 **Production-ready parallel photo and video organizer with dry-run support**
 
